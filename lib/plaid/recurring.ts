@@ -19,6 +19,11 @@ export interface RecurringCharge {
   isActive: boolean;
 }
 
+interface PlaidErrorPayload {
+  error_code?: string;
+  error_message?: string;
+}
+
 const FREQUENCY_MAP: Record<string, ObligationFrequency> = {
   [RecurringTransactionFrequency.Weekly]: "weekly",
   [RecurringTransactionFrequency.Biweekly]: "biweekly",
@@ -49,6 +54,58 @@ function isLikelySubscription(stream: TransactionStream): boolean {
   return SUBSCRIPTION_KEYWORDS.some((kw) => combined.includes(kw));
 }
 
+function getPlaidErrorPayload(error: unknown): PlaidErrorPayload | null {
+  const maybe = error as {
+    response?: {
+      data?: PlaidErrorPayload;
+    };
+  };
+  return maybe?.response?.data ?? null;
+}
+
+export function isProductNotReadyError(error: unknown): boolean {
+  const payload = getPlaidErrorPayload(error);
+  return payload?.error_code === "PRODUCT_NOT_READY";
+}
+
+export function getPlaidErrorCode(error: unknown): string | null {
+  const payload = getPlaidErrorPayload(error);
+  return payload?.error_code ?? null;
+}
+
+export function getPlaidErrorMessage(error: unknown): string | null {
+  const payload = getPlaidErrorPayload(error);
+  return payload?.error_message ?? null;
+}
+
+function mapStream(stream: TransactionStream): RecurringCharge {
+  return {
+    streamId: stream.stream_id,
+    merchantName: stream.merchant_name || stream.description,
+    amount: Math.abs(stream.average_amount.amount ?? 0),
+    frequency: FREQUENCY_MAP[stream.frequency] || "monthly",
+    nextExpectedDate: stream.predicted_next_date || null,
+    isSubscription: isLikelySubscription(stream),
+    isActive: stream.is_active,
+  };
+}
+
+export async function getRecurringChargesFromAccessToken(
+  accessToken: string,
+  accountIds: string[],
+): Promise<{ outflows: RecurringCharge[]; inflows: RecurringCharge[] }> {
+  const response = await plaidClient.transactionsRecurringGet({
+    access_token: accessToken,
+    account_ids: accountIds,
+  });
+
+  const data = response.data;
+  return {
+    outflows: data.outflow_streams.filter((s) => s.is_active).map(mapStream),
+    inflows: data.inflow_streams.filter((s) => s.is_active).map(mapStream),
+  };
+}
+
 /**
  * Fetch all recurring transaction streams (outflows = obligations).
  * Returns normalized charges ready to be upserted into the obligation table.
@@ -58,26 +115,5 @@ export async function getRecurringCharges(
   accountIds: string[],
 ): Promise<{ outflows: RecurringCharge[]; inflows: RecurringCharge[] }> {
   const accessToken = decrypt(encryptedAccessToken);
-
-  const response = await plaidClient.transactionsRecurringGet({
-    access_token: accessToken,
-    account_ids: accountIds,
-  });
-
-  const data = response.data;
-
-  const mapStream = (stream: TransactionStream): RecurringCharge => ({
-    streamId: stream.stream_id,
-    merchantName: stream.merchant_name || stream.description,
-    amount: Math.abs(stream.average_amount.amount ?? 0),
-    frequency: FREQUENCY_MAP[stream.frequency] || "monthly",
-    nextExpectedDate: stream.predicted_next_date || null,
-    isSubscription: isLikelySubscription(stream),
-    isActive: stream.is_active,
-  });
-
-  return {
-    outflows: data.outflow_streams.filter((s) => s.is_active).map(mapStream),
-    inflows: data.inflow_streams.filter((s) => s.is_active).map(mapStream),
-  };
+  return getRecurringChargesFromAccessToken(accessToken, accountIds);
 }

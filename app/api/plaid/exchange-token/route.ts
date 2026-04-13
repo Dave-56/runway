@@ -3,12 +3,11 @@ import { encrypt } from "@/lib/utils/crypto";
 import {
   createPlaidConnection,
   getUserById,
-  upsertObligation,
 } from "@/lib/db/queries";
-import { getRecurringCharges } from "@/lib/plaid/recurring";
-import { normalizeToMonthly } from "@/lib/utils/money";
 import { processMessage } from "@/lib/agent/core";
 import { BANK_LINKED_SIGNAL } from "@/lib/agent/router";
+import { sendMessage } from "@/lib/telegram/client";
+import { syncRecurringOnboardingData } from "@/lib/plaid/onboarding-sync";
 
 export async function POST(request: Request) {
   try {
@@ -35,39 +34,41 @@ export async function POST(request: Request) {
       itemId: item_id,
     });
 
-    // Fetch recurring charges and populate obligations table
+    // Fetch recurring charges and populate obligations table.
+    // PRODUCT_NOT_READY is expected immediately after link; treat it as warm-up, not failure.
     try {
-      // Get all account IDs from Plaid for recurring transaction detection
-      const balanceResponse = await plaidClient.accountsBalanceGet({
-        access_token,
-      });
-      const allAccountIds = balanceResponse.data.accounts.map((a) => a.account_id);
-
-      const { outflows } = await getRecurringCharges(encryptedToken, allAccountIds);
-
-      // Upsert each recurring charge into the obligations table
-      for (const charge of outflows) {
-        const monthlyAmount = normalizeToMonthly(charge.amount, charge.frequency);
-        await upsertObligation({
-          userId: Number(user_id),
-          plaidStreamId: charge.streamId,
-          merchantName: charge.merchantName,
-          amount: monthlyAmount,
-          frequency: charge.frequency,
-          nextExpectedDate: charge.nextExpectedDate,
-          category: "other",
-          isSubscription: charge.isSubscription,
-          status: "active",
-        });
+      const dbUser = await getUserById(Number(user_id));
+      if (!dbUser) {
+        return Response.json({ success: true });
       }
 
-      // Trigger the agent to deliver Phase 1 immediately — no waiting
-      const dbUser = await getUserById(Number(user_id));
-      if (dbUser) {
-        await processMessage(dbUser, BANK_LINKED_SIGNAL);
+      const syncResult = await syncRecurringOnboardingData(
+        dbUser.id,
+        encryptedToken,
+      );
+
+      if (syncResult.status === "ready") {
+        await processMessage(
+          dbUser,
+          BANK_LINKED_SIGNAL,
+          undefined,
+          { internalTrigger: true },
+        );
+      } else {
+        await sendMessage(
+          dbUser.telegramChatId,
+          "Accounts linked. I’m still pulling recurring charges from Plaid. This usually takes a minute or two. I’ll message you as soon as it’s ready.",
+        );
       }
     } catch (err) {
       console.error("Failed to fetch recurring charges after linking:", err);
+      const dbUser = await getUserById(Number(user_id));
+      if (dbUser) {
+        await sendMessage(
+          dbUser.telegramChatId,
+          "Accounts linked. I couldn’t pull recurring charges yet, but I’ll keep trying in the background and message you when they’re ready.",
+        );
+      }
     }
 
     return Response.json({ success: true });

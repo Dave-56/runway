@@ -41,13 +41,14 @@ function formatVerifiedAmounts(toolResults: unknown[]): string {
 
 interface FinalizeInteractionInput {
   dbUser: User;
-  userContent: string;
+  userContent?: string;
   finalText: string;
   recentCheckins: Array<{
     userReplied: boolean;
     telegramMessageId: number | null;
   }>;
   reactivateIfSilent?: boolean;
+  persistUserMessage?: boolean;
 }
 
 async function finalizeInteraction({
@@ -56,12 +57,15 @@ async function finalizeInteraction({
   finalText,
   recentCheckins,
   reactivateIfSilent = true,
+  persistUserMessage = true,
 }: FinalizeInteractionInput): Promise<void> {
   if (finalText) {
     await sendMessage(dbUser.telegramChatId, finalText);
   }
 
-  await saveConversationMessage(dbUser.id, "user", userContent);
+  if (persistUserMessage && userContent) {
+    await saveConversationMessage(dbUser.id, "user", userContent);
+  }
   if (finalText) {
     await saveConversationMessage(dbUser.id, "assistant", finalText);
   }
@@ -95,6 +99,7 @@ export async function processMessage(
   dbUser: User,
   text: string,
   callbackData?: string,
+  options: { internalTrigger?: boolean } = {},
 ): Promise<void> {
   // 0. Check if user has a bank connected — if not, send Plaid Link flow
   const plaidConn = await getPlaidConnection(dbUser.id);
@@ -133,18 +138,19 @@ export async function processMessage(
     ]);
 
   // 2. Build messages with conversation history for multi-turn context
-  const userContent = callbackData
-    ? `[User tapped button: "${callbackData}"]`
-    : text;
+  const userContent = options.internalTrigger
+    ? undefined
+    : callbackData
+      ? `[User tapped button: "${callbackData}"]`
+      : text;
 
   const historyMessages: ModelMessage[] = conversationHistory.map((msg) => ({
     role: msg.role as "user" | "assistant",
     content: msg.content,
   }));
-  const messages: ModelMessage[] = [
-    ...historyMessages,
-    { role: "user", content: userContent },
-  ];
+  const messages: ModelMessage[] = userContent
+    ? [...historyMessages, { role: "user", content: userContent }]
+    : [...historyMessages];
 
   // 3. Hybrid router: deterministic intent checks first, lightweight classifier second
   const intentDecision = await classifyIntent({
@@ -187,6 +193,7 @@ export async function processMessage(
       finalText: routedAction.finalText,
       recentCheckins,
       reactivateIfSilent: routedAction.reactivateIfSilent,
+      persistUserMessage: !options.internalTrigger,
     });
     return;
   }
