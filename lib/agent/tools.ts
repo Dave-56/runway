@@ -28,6 +28,7 @@ const RESTRICTED_PHASES: Record<string, readonly string[]> = {
     "flag_subscription_dead",
     "get_debt_summary",
     "get_spending_summary",
+    "update_allocation",
     "save_memory",
     "recall_memory",
   ],
@@ -209,23 +210,43 @@ export function buildTools(userId: number, phase: string) {
 
     update_allocation: tool({
       description:
-        "Store the user's allocation decision for how to split their gap money. Use after the user decides how much to put toward debt, cushion, and living.",
+        "Store or update the user's financial allocation. Use to save income (after the user tells you their take-home), and later to store their gap split decision (debt, cushion, living). Any field you omit stays unchanged.",
       inputSchema: z.object({
-        debt_amount: z.number().describe("Monthly amount to put toward debt payoff"),
+        monthly_income: z
+          .number()
+          .optional()
+          .describe("Monthly take-home income (after taxes). Set this when the user tells you their income."),
+        obligations_total: z
+          .number()
+          .optional()
+          .describe("Total monthly obligations. Usually computed from obligations, but can be overridden."),
+        debt_amount: z
+          .number()
+          .optional()
+          .describe("Monthly amount to put toward debt payoff"),
         cushion_amount: z
           .number()
+          .optional()
           .describe("Monthly amount to put toward emergency cushion"),
         strategy: z
           .enum(["avalanche", "snowball", "hybrid", "none"])
+          .optional()
           .describe("Debt payoff strategy: avalanche (highest rate first), snowball (smallest balance first), hybrid (mix), or none"),
       }),
-      execute: async ({ debt_amount, cushion_amount, strategy }) => {
-        const result = await upsertAllocation({
-          userId,
-          debtAmount: debt_amount,
-          cushionAmount: cushion_amount,
-          strategy,
-        });
+      execute: async ({ monthly_income, obligations_total, debt_amount, cushion_amount, strategy }) => {
+        const data: Parameters<typeof upsertAllocation>[0] = { userId };
+        if (monthly_income !== undefined) data.monthlyIncome = monthly_income;
+        if (obligations_total !== undefined) data.obligationsTotal = obligations_total;
+        if (debt_amount !== undefined) data.debtAmount = debt_amount;
+        if (cushion_amount !== undefined) data.cushionAmount = cushion_amount;
+        if (strategy !== undefined) data.strategy = strategy;
+
+        // Auto-compute gap if we have both income and obligations
+        if (monthly_income !== undefined && obligations_total !== undefined) {
+          data.gap = Math.round((monthly_income - obligations_total) * 100) / 100;
+        }
+
+        const result = await upsertAllocation(data);
         return result;
       },
     }),
