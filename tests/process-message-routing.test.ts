@@ -143,8 +143,9 @@ async function main() {
     assert.match(action.finalText, /\$4,067\.02/);
     assert.match(action.finalText, /My call: run both/i);
     assert.match(action.finalText, /emergency cash buffer \(cushion\)/i);
-    assert.match(action.finalText, /Straight-line projection:/i);
-    assert.match(action.finalText, /12 months/i);
+    assert.match(action.finalText, /Simulation snapshot if you stay consistent:/i);
+    assert.match(action.finalText, /30 days/i);
+    assert.match(action.finalText, /365 days/i);
     assert.match(action.finalText, /recommended both split/i);
   });
 
@@ -171,7 +172,8 @@ async function main() {
     assert.equal(action?.allocationUpdate?.cushionAmount, 0);
     assert.equal(action?.allocationUpdate?.livingAmount, 0);
     assert.equal(action?.allocationUpdate?.strategy, "avalanche");
-    assert.match(action?.finalText || "", /Straight-line projection:/i);
+    assert.match(action?.finalText || "", /Simulation snapshot if you stay consistent:/i);
+    assert.match(action?.finalText || "", /90 days/i);
   });
 
   await run("allocation_choice_both route applies deterministic 70/30 split", () => {
@@ -197,7 +199,8 @@ async function main() {
     assert.equal(action?.allocationUpdate?.livingAmount, 0);
     assert.equal(action?.allocationUpdate?.strategy, "hybrid");
     assert.match(action?.finalText || "", /emergency cash buffer \(cushion\)/i);
-    assert.match(action?.finalText || "", /Straight-line projection:/i);
+    assert.match(action?.finalText || "", /Simulation snapshot if you stay consistent:/i);
+    assert.match(action?.finalText || "", /180 days/i);
   });
 
   await run("allocation intent without income returns deterministic prompt", () => {

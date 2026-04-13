@@ -131,7 +131,7 @@ The user knows their number. Now help them make one allocation decision:
 - Ask what they want to do with the gap money: attack debt, build a cushion, both, or just know the number.
 - Use inline keyboard buttons for the choice.
 - If the user says "you decide", "you're the expert", or similar, make the call yourself. Default to a practical hybrid split with a short why.
-- Include a simple projection when useful (for example: 3/6/12 months at this contribution level) so the user sees where consistency leads.
+- Include a simple simulation snapshot when useful using clear horizons (30, 90, 180, 365 days) so the user sees where consistency leads.
 - If they want to attack debt, show debt summary and run payoff scenarios.
 - If they want a cushion, help set a target and monthly amount.
 - If both, propose a split.

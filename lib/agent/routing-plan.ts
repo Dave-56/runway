@@ -62,16 +62,28 @@ function projectAmount(monthlyAmount: number, months: number): number {
   return roundToCents(Math.max(0, monthlyAmount) * months);
 }
 
+const SIMULATION_STEPS = [
+  { days: 30, months: 1 },
+  { days: 90, months: 3 },
+  { days: 180, months: 6 },
+  { days: 365, months: 12 },
+] as const;
+
+function monthLabel(months: number): string {
+  return months === 1 ? "month" : "months";
+}
+
 function buildSingleTrackProjection(
   monthlyAmount: number,
   formatCurrency: (value: number) => string,
   label: string,
 ): string {
   if (monthlyAmount <= 0) return "";
-  const month3 = formatCurrency(projectAmount(monthlyAmount, 3));
-  const month6 = formatCurrency(projectAmount(monthlyAmount, 6));
-  const month12 = formatCurrency(projectAmount(monthlyAmount, 12));
-  return `Straight-line projection: 3 months = ${month3} ${label}, 6 months = ${month6}, 12 months = ${month12}.`;
+  const lines = SIMULATION_STEPS.map((step) => {
+    const projected = formatCurrency(projectAmount(monthlyAmount, step.months));
+    return `${step.days} days (~${step.months} ${monthLabel(step.months)}): ${projected} ${label}`;
+  });
+  return ["Simulation snapshot if you stay consistent:", ...lines].join("\n");
 }
 
 function buildHybridProjection(
@@ -79,10 +91,12 @@ function buildHybridProjection(
   cushionAmount: number,
   formatCurrency: (value: number) => string,
 ): string {
-  const month3 = `3 months = ${formatCurrency(projectAmount(cushionAmount, 3))} cushion and ${formatCurrency(projectAmount(debtAmount, 3))} to debt`;
-  const month6 = `6 months = ${formatCurrency(projectAmount(cushionAmount, 6))} cushion and ${formatCurrency(projectAmount(debtAmount, 6))} to debt`;
-  const month12 = `12 months = ${formatCurrency(projectAmount(cushionAmount, 12))} cushion and ${formatCurrency(projectAmount(debtAmount, 12))} to debt`;
-  return `Straight-line projection: ${month3}; ${month6}; ${month12}.`;
+  const lines = SIMULATION_STEPS.map((step) => {
+    const projectedCushion = formatCurrency(projectAmount(cushionAmount, step.months));
+    const projectedDebt = formatCurrency(projectAmount(debtAmount, step.months));
+    return `${step.days} days (~${step.months} ${monthLabel(step.months)}): ${projectedCushion} in emergency cash buffer and ${projectedDebt} toward debt`;
+  });
+  return ["Simulation snapshot if you stay consistent:", ...lines].join("\n");
 }
 
 function getHybridSplit(gap: number): { debtAmount: number; cushionAmount: number; livingAmount: number } {
@@ -232,15 +246,16 @@ export function buildRoutedAction(
       cushionAmount,
       deps.formatCurrency,
     );
-    const finalText = [
+    const summaryLines = [
       `${deps.formatCurrency(monthlyIncome)} in and ${deps.formatCurrency(input.obligationsTotal)} out leaves ${deps.formatCurrency(gap)}/month.`,
       `My call: run both so we build safety and still push debt down — ${deps.formatCurrency(debtAmount)}/month to debt and ${deps.formatCurrency(cushionAmount)}/month to your emergency cash buffer (cushion).`,
       cushionRunwayLine,
+      "",
       projectionLine,
+      "",
       "What do you want to do with the gap: my recommended both split, debt-only, or cushion-only?",
-    ]
-      .filter(Boolean)
-      .join(" ");
+    ].filter((line) => line !== "");
+    const finalText = summaryLines.join("\n");
 
     return {
       finalText,
@@ -289,7 +304,11 @@ export function buildRoutedAction(
         "to debt",
       );
       return {
-        finalText: `Done. ${deps.formatCurrency(spendableGap)}/month is now set to debt payoff. ${projectionLine} I’ll track it with you in check-ins.`,
+        finalText: [
+          `Done. ${deps.formatCurrency(spendableGap)}/month is now set to debt payoff.`,
+          projectionLine,
+          "I’ll track it with you in check-ins.",
+        ].join("\n"),
         userUpdate: { phase: "stay_honest" },
         allocationUpdate: {
           ...baseAllocation,
@@ -308,7 +327,10 @@ export function buildRoutedAction(
         "in your emergency cash buffer (cushion)",
       );
       return {
-        finalText: `Done. ${deps.formatCurrency(spendableGap)}/month is now set to your emergency cash buffer (cushion). ${projectionLine}`,
+        finalText: [
+          `Done. ${deps.formatCurrency(spendableGap)}/month is now set to your emergency cash buffer (cushion).`,
+          projectionLine,
+        ].join("\n"),
         userUpdate: { phase: "stay_honest" },
         allocationUpdate: {
           ...baseAllocation,
@@ -333,7 +355,13 @@ export function buildRoutedAction(
     );
 
     return {
-      finalText: `Done. I set a hybrid split: ${deps.formatCurrency(debtAmount)}/month to debt and ${deps.formatCurrency(cushionAmount)}/month to your emergency cash buffer (cushion).${cushionRunwayLine} ${projectionLine}`,
+      finalText: [
+        `Done. I set a hybrid split: ${deps.formatCurrency(debtAmount)}/month to debt and ${deps.formatCurrency(cushionAmount)}/month to your emergency cash buffer (cushion).`,
+        cushionRunwayLine.trim(),
+        projectionLine,
+      ]
+        .filter(Boolean)
+        .join("\n"),
       userUpdate: { phase: "stay_honest" },
       allocationUpdate: {
         ...baseAllocation,
