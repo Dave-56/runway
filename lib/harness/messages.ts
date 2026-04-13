@@ -1,6 +1,6 @@
-import { formatCurrency } from "../utils/money.ts";
-import { bold, escapeMarkdownV2 } from "../telegram/format.ts";
-import { roundMoney, sumMoney } from "./calculations.ts";
+import { formatCurrency } from "../utils/money";
+import { bold, escapeMarkdownV2 } from "../telegram/format";
+import { roundMoney, sumMoney } from "./calculations";
 
 export interface CheckinUpcomingSubItem {
   merchant: string;
