@@ -121,7 +121,7 @@ const PHASE_INSTRUCTIONS: Record<string, string> = {
   know_number: `Current phase: KNOW THE NUMBER
 The user is learning their financial picture for the first time.
 
-On the FIRST message from the user after bank connection:
+When you see "[Bank accounts just linked — deliver the numbers]" or this is the FIRST interaction after bank connection:
 1. Call get_obligations to pull their recurring charges.
 2. Call get_account_balances to get current balances.
 3. Present the BIG items first (the 4-5 largest obligations with amounts). Example:

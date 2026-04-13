@@ -7,8 +7,8 @@ import {
   upsertAllocation,
 } from "@/lib/db/queries";
 import { getRecurringCharges } from "@/lib/plaid/recurring";
-import { sendMessage } from "@/lib/telegram/client";
 import { normalizeToMonthly } from "@/lib/utils/money";
+import { processMessage } from "@/lib/agent/core";
 
 export async function POST(request: Request) {
   try {
@@ -79,13 +79,10 @@ export async function POST(request: Request) {
         });
       }
 
-      // Notify the user via Telegram
+      // Trigger the agent to deliver Phase 1 immediately — no waiting
       const dbUser = await getUserById(Number(user_id));
       if (dbUser) {
-        await sendMessage(
-          dbUser.telegramChatId,
-          "Linked. I've got your numbers.",
-        );
+        await processMessage(dbUser, "[Bank accounts just linked — deliver the numbers]");
       }
     } catch (err) {
       console.error("Failed to fetch recurring charges after linking:", err);
