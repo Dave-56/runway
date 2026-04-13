@@ -2,6 +2,7 @@ import {
   getPlaidConnection,
   getUser,
   upsertObligation,
+  upsertAllocation,
 } from "@/lib/db/queries";
 import { plaidClient } from "@/lib/plaid/client";
 import { getRecurringCharges } from "@/lib/plaid/recurring";
@@ -40,16 +41,19 @@ export async function GET(request: Request) {
   const allAccountIds = balanceResponse.data.accounts.map((a) => a.account_id);
 
   // Fetch recurring charges
-  const { outflows } = await getRecurringCharges(conn.accessToken, allAccountIds);
+  const { outflows, inflows } = await getRecurringCharges(conn.accessToken, allAccountIds);
 
   // Upsert into obligations table
+  let obligationsTotal = 0;
   let count = 0;
   for (const charge of outflows) {
+    const monthlyAmount = normalizeToMonthly(charge.amount, charge.frequency);
+    obligationsTotal += monthlyAmount;
     await upsertObligation({
       userId: user.id,
       plaidStreamId: charge.streamId,
       merchantName: charge.merchantName,
-      amount: normalizeToMonthly(charge.amount, charge.frequency),
+      amount: monthlyAmount,
       frequency: charge.frequency,
       nextExpectedDate: charge.nextExpectedDate,
       category: "other",
@@ -59,5 +63,26 @@ export async function GET(request: Request) {
     count++;
   }
 
-  return NextResponse.json({ success: true, obligations_synced: count });
+  // Compute monthly income from recurring inflows and store
+  const monthlyIncome = inflows.reduce(
+    (sum, i) => sum + normalizeToMonthly(i.amount, i.frequency),
+    0,
+  );
+
+  if (monthlyIncome > 0) {
+    await upsertAllocation({
+      userId: user.id,
+      monthlyIncome: Math.round(monthlyIncome * 100) / 100,
+      obligationsTotal: Math.round(obligationsTotal * 100) / 100,
+      gap: Math.round((monthlyIncome - obligationsTotal) * 100) / 100,
+    });
+  }
+
+  return NextResponse.json({
+    success: true,
+    obligations_synced: count,
+    monthly_income: Math.round(monthlyIncome * 100) / 100,
+    obligations_total: Math.round(obligationsTotal * 100) / 100,
+    gap: Math.round((monthlyIncome - obligationsTotal) * 100) / 100,
+  });
 }

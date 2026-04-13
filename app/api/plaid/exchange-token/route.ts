@@ -2,12 +2,11 @@ import { plaidClient } from "@/lib/plaid/client";
 import { encrypt } from "@/lib/utils/crypto";
 import {
   createPlaidConnection,
-  getPlaidConnection,
   getUserById,
   upsertObligation,
+  upsertAllocation,
 } from "@/lib/db/queries";
 import { getRecurringCharges } from "@/lib/plaid/recurring";
-import { getAccountBalances } from "@/lib/plaid/balances";
 import { sendMessage } from "@/lib/telegram/client";
 import { normalizeToMonthly } from "@/lib/utils/money";
 
@@ -38,26 +37,24 @@ export async function POST(request: Request) {
 
     // Fetch recurring charges and populate obligations table
     try {
-      const balances = await getAccountBalances(encryptedToken);
-      const accountIds = [
-        ...balances.checking.map(() => ""),
-      ];
-
       // Get all account IDs from Plaid for recurring transaction detection
       const balanceResponse = await plaidClient.accountsBalanceGet({
         access_token,
       });
       const allAccountIds = balanceResponse.data.accounts.map((a) => a.account_id);
 
-      const { outflows } = await getRecurringCharges(encryptedToken, allAccountIds);
+      const { outflows, inflows } = await getRecurringCharges(encryptedToken, allAccountIds);
 
       // Upsert each recurring charge into the obligations table
+      let obligationsTotal = 0;
       for (const charge of outflows) {
+        const monthlyAmount = normalizeToMonthly(charge.amount, charge.frequency);
+        obligationsTotal += monthlyAmount;
         await upsertObligation({
           userId: Number(user_id),
           plaidStreamId: charge.streamId,
           merchantName: charge.merchantName,
-          amount: normalizeToMonthly(charge.amount, charge.frequency),
+          amount: monthlyAmount,
           frequency: charge.frequency,
           nextExpectedDate: charge.nextExpectedDate,
           category: "other",
@@ -66,11 +63,27 @@ export async function POST(request: Request) {
         });
       }
 
+      // Compute monthly income from recurring inflows
+      const monthlyIncome = inflows.reduce(
+        (sum, i) => sum + normalizeToMonthly(i.amount, i.frequency),
+        0,
+      );
+
+      // Store income and gap so the agent has these numbers immediately
+      if (monthlyIncome > 0) {
+        await upsertAllocation({
+          userId: Number(user_id),
+          monthlyIncome: Math.round(monthlyIncome * 100) / 100,
+          obligationsTotal: Math.round(obligationsTotal * 100) / 100,
+          gap: Math.round((monthlyIncome - obligationsTotal) * 100) / 100,
+        });
+      }
+
       // Notify the user via Telegram
-      const user = await getUserById(Number(user_id));
-      if (user) {
+      const dbUser = await getUserById(Number(user_id));
+      if (dbUser) {
         await sendMessage(
-          user.telegramChatId,
+          dbUser.telegramChatId,
           "Got your accounts linked. I've pulled your recurring charges. Say hi when you're ready to see the numbers.",
         );
       }
