@@ -141,6 +141,11 @@ async function main() {
     assert.match(action.finalText, /\$6,893/);
     assert.match(action.finalText, /\$2,825\.98/);
     assert.match(action.finalText, /\$4,067\.02/);
+    assert.match(action.finalText, /My call: run both/i);
+    assert.match(action.finalText, /emergency cash buffer \(cushion\)/i);
+    assert.match(action.finalText, /Straight-line projection:/i);
+    assert.match(action.finalText, /12 months/i);
+    assert.match(action.finalText, /recommended both split/i);
   });
 
   await run("allocation_choice_debt route sets full spendable gap to debt", () => {
@@ -166,6 +171,7 @@ async function main() {
     assert.equal(action?.allocationUpdate?.cushionAmount, 0);
     assert.equal(action?.allocationUpdate?.livingAmount, 0);
     assert.equal(action?.allocationUpdate?.strategy, "avalanche");
+    assert.match(action?.finalText || "", /Straight-line projection:/i);
   });
 
   await run("allocation_choice_both route applies deterministic 70/30 split", () => {
@@ -190,6 +196,8 @@ async function main() {
     assert.equal(action?.allocationUpdate?.cushionAmount, 1220.11);
     assert.equal(action?.allocationUpdate?.livingAmount, 0);
     assert.equal(action?.allocationUpdate?.strategy, "hybrid");
+    assert.match(action?.finalText || "", /emergency cash buffer \(cushion\)/i);
+    assert.match(action?.finalText || "", /Straight-line projection:/i);
   });
 
   await run("allocation intent without income returns deterministic prompt", () => {

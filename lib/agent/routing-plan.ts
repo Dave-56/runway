@@ -58,6 +58,41 @@ function sumAmounts(values: number[]): number {
   return roundToCents(values.reduce((sum, value) => sum + value, 0));
 }
 
+function projectAmount(monthlyAmount: number, months: number): number {
+  return roundToCents(Math.max(0, monthlyAmount) * months);
+}
+
+function buildSingleTrackProjection(
+  monthlyAmount: number,
+  formatCurrency: (value: number) => string,
+  label: string,
+): string {
+  if (monthlyAmount <= 0) return "";
+  const month3 = formatCurrency(projectAmount(monthlyAmount, 3));
+  const month6 = formatCurrency(projectAmount(monthlyAmount, 6));
+  const month12 = formatCurrency(projectAmount(monthlyAmount, 12));
+  return `Straight-line projection: 3 months = ${month3} ${label}, 6 months = ${month6}, 12 months = ${month12}.`;
+}
+
+function buildHybridProjection(
+  debtAmount: number,
+  cushionAmount: number,
+  formatCurrency: (value: number) => string,
+): string {
+  const month3 = `3 months = ${formatCurrency(projectAmount(cushionAmount, 3))} cushion and ${formatCurrency(projectAmount(debtAmount, 3))} to debt`;
+  const month6 = `6 months = ${formatCurrency(projectAmount(cushionAmount, 6))} cushion and ${formatCurrency(projectAmount(debtAmount, 6))} to debt`;
+  const month12 = `12 months = ${formatCurrency(projectAmount(cushionAmount, 12))} cushion and ${formatCurrency(projectAmount(debtAmount, 12))} to debt`;
+  return `Straight-line projection: ${month3}; ${month6}; ${month12}.`;
+}
+
+function getHybridSplit(gap: number): { debtAmount: number; cushionAmount: number; livingAmount: number } {
+  const spendableGap = Math.max(0, gap);
+  const debtAmount = roundToCents(spendableGap * 0.7);
+  const cushionAmount = roundToCents(spendableGap * 0.3);
+  const livingAmount = roundToCents(spendableGap - debtAmount - cushionAmount);
+  return { debtAmount, cushionAmount, livingAmount };
+}
+
 function sortObligations(obligations: ObligationSnapshot[]): ObligationSnapshot[] {
   return [...obligations].sort((a, b) => b.amount - a.amount);
 }
@@ -186,9 +221,29 @@ export function buildRoutedAction(
 
     const monthlyIncome = roundToCents(parsedIncome);
     const gap = deps.computeGap(monthlyIncome, input.obligationsTotal);
+    const { debtAmount, cushionAmount } = getHybridSplit(gap);
+    const monthsToThousand =
+      cushionAmount > 0 ? Math.ceil(1000 / cushionAmount) : null;
+    const cushionRunwayLine = monthsToThousand
+      ? `At that pace, you stack a $1,000 cushion in about ${monthsToThousand} month${monthsToThousand === 1 ? "" : "s"}.`
+      : "";
+    const projectionLine = buildHybridProjection(
+      debtAmount,
+      cushionAmount,
+      deps.formatCurrency,
+    );
+    const finalText = [
+      `${deps.formatCurrency(monthlyIncome)} in and ${deps.formatCurrency(input.obligationsTotal)} out leaves ${deps.formatCurrency(gap)}/month.`,
+      `My call: run both so we build safety and still push debt down — ${deps.formatCurrency(debtAmount)}/month to debt and ${deps.formatCurrency(cushionAmount)}/month to your emergency cash buffer (cushion).`,
+      cushionRunwayLine,
+      projectionLine,
+      "What do you want to do with the gap: my recommended both split, debt-only, or cushion-only?",
+    ]
+      .filter(Boolean)
+      .join(" ");
 
     return {
-      finalText: `${deps.formatCurrency(monthlyIncome)} in and ${deps.formatCurrency(input.obligationsTotal)} out leaves ${deps.formatCurrency(gap)}/month. Do you want that gap going to debt, cushion, both, or keep it flexible?`,
+      finalText,
       userUpdate: { phase: "allocate" },
       allocationUpdate: {
         userId: input.userId,
@@ -228,8 +283,13 @@ export function buildRoutedAction(
     };
 
     if (input.intent === "allocation_choice_debt") {
+      const projectionLine = buildSingleTrackProjection(
+        spendableGap,
+        deps.formatCurrency,
+        "to debt",
+      );
       return {
-        finalText: `Done. ${deps.formatCurrency(spendableGap)}/month is now set to debt payoff. I’ll track it with you in check-ins.`,
+        finalText: `Done. ${deps.formatCurrency(spendableGap)}/month is now set to debt payoff. ${projectionLine} I’ll track it with you in check-ins.`,
         userUpdate: { phase: "stay_honest" },
         allocationUpdate: {
           ...baseAllocation,
@@ -242,8 +302,13 @@ export function buildRoutedAction(
     }
 
     if (input.intent === "allocation_choice_cushion") {
+      const projectionLine = buildSingleTrackProjection(
+        spendableGap,
+        deps.formatCurrency,
+        "in your emergency cash buffer (cushion)",
+      );
       return {
-        finalText: `Done. ${deps.formatCurrency(spendableGap)}/month is now set to your cushion.`,
+        finalText: `Done. ${deps.formatCurrency(spendableGap)}/month is now set to your emergency cash buffer (cushion). ${projectionLine}`,
         userUpdate: { phase: "stay_honest" },
         allocationUpdate: {
           ...baseAllocation,
@@ -255,12 +320,20 @@ export function buildRoutedAction(
       };
     }
 
-    const debtAmount = roundToCents(spendableGap * 0.7);
-    const cushionAmount = roundToCents(spendableGap * 0.3);
-    const livingAmount = roundToCents(spendableGap - debtAmount - cushionAmount);
+    const { debtAmount, cushionAmount, livingAmount } = getHybridSplit(spendableGap);
+    const monthsToThousand =
+      cushionAmount > 0 ? Math.ceil(1000 / cushionAmount) : null;
+    const cushionRunwayLine = monthsToThousand
+      ? ` At this pace, you stack a $1,000 cushion in about ${monthsToThousand} month${monthsToThousand === 1 ? "" : "s"}.`
+      : "";
+    const projectionLine = buildHybridProjection(
+      debtAmount,
+      cushionAmount,
+      deps.formatCurrency,
+    );
 
     return {
-      finalText: `Done. I set a hybrid split: ${deps.formatCurrency(debtAmount)}/month to debt and ${deps.formatCurrency(cushionAmount)}/month to cushion.`,
+      finalText: `Done. I set a hybrid split: ${deps.formatCurrency(debtAmount)}/month to debt and ${deps.formatCurrency(cushionAmount)}/month to your emergency cash buffer (cushion).${cushionRunwayLine} ${projectionLine}`,
       userUpdate: { phase: "stay_honest" },
       allocationUpdate: {
         ...baseAllocation,

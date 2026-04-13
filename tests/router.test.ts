@@ -120,6 +120,23 @@ async function main() {
     assert.equal(cushion.intent, "allocation_choice_cushion");
   });
 
+  await run("classifies expert-decision phrasing as hybrid allocation choice", async () => {
+    const pending = assistantHistory(
+      "What do you want to do with the gap: my recommended both split, debt-only, or cushion-only?",
+    );
+
+    const result = await classifyIntent({
+      text: "i mean you are the expert no?",
+      phase: "allocate",
+      conversationHistory: pending,
+      hasMonthlyIncome: true,
+      allowLLMFallback: false,
+    });
+
+    assert.equal(result.intent, "allocation_choice_both");
+    assert.equal(result.source, "deterministic");
+  });
+
   await run("classifies check-in preference replies from pending prompt", async () => {
     const pending = assistantHistory(
       "Been a couple weeks. Want me to keep these coming or go quiet for a bit?",

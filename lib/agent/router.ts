@@ -48,6 +48,8 @@ const CHECKIN_QUIET_RE = /\b(quiet|pause|stop|go quiet)\b/i;
 const DEBT_RE = /\b(debt|card|cards|pay off|paydown|avalanche|snowball)\b/i;
 const CUSHION_RE = /\b(cushion|emergency|safety net|savings)\b/i;
 const BOTH_RE = /\b(both|split)\b/i;
+const EXPERT_DECIDE_RE =
+  /\b(you decide|your call|you pick|pick for me|you.?re the expert|you are the expert|expert call|whatever you think|up to you)\b/i;
 const INCOME_CUE_RE =
   /\b(income|take[- ]?home|salary|paycheck|pay cheque|i make|i earn|bring in)\b/i;
 
@@ -224,6 +226,14 @@ function classifyDeterministic(
   }
 
   if (pendingState === "awaiting_allocation_choice") {
+    if (EXPERT_DECIDE_RE.test(text)) {
+      return {
+        intent: "allocation_choice_both",
+        confidence: 0.94,
+        source: "deterministic",
+        pendingState,
+      };
+    }
     if (BOTH_RE.test(text)) {
       return {
         intent: "allocation_choice_both",
