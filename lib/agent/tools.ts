@@ -241,9 +241,16 @@ export function buildTools(userId: number, phase: string) {
         if (cushion_amount !== undefined) data.cushionAmount = cushion_amount;
         if (strategy !== undefined) data.strategy = strategy;
 
-        // Auto-compute gap if we have both income and obligations
-        if (monthly_income !== undefined && obligations_total !== undefined) {
-          data.gap = Math.round((monthly_income - obligations_total) * 100) / 100;
+        // Auto-compute gap — fetch obligations from DB if not provided
+        const income = monthly_income;
+        let obTotal = obligations_total;
+        if (income !== undefined && obTotal === undefined) {
+          const { getObligationsTotal } = await import("@/lib/db/queries");
+          obTotal = await getObligationsTotal(userId);
+        }
+        if (income !== undefined && obTotal !== undefined) {
+          data.obligationsTotal = obTotal;
+          data.gap = Math.round((income - obTotal) * 100) / 100;
         }
 
         const result = await upsertAllocation(data);
