@@ -17,11 +17,28 @@ import { syncTransactions } from "@/lib/plaid/transactions";
 import { updateCursor } from "@/lib/db/queries";
 
 /**
- * Build the full tool set for a given user.
+ * Phases where only a subset of tools is exposed.
+ * Any phase NOT listed here gets the full tool set.
+ */
+const RESTRICTED_PHASES: Record<string, readonly string[]> = {
+  know_number: [
+    "get_account_balances",
+    "get_obligations",
+    "get_subscriptions",
+    "flag_subscription_dead",
+    "get_debt_summary",
+    "get_spending_summary",
+    "save_memory",
+    "recall_memory",
+  ],
+};
+
+/**
+ * Build the tool set for a given user, filtered by their current phase.
  * Each tool closes over the userId so the LLM doesn't need to pass it.
  */
-export function buildTools(userId: number) {
-  return {
+export function buildTools(userId: number, phase: string) {
+  const allTools = {
     get_account_balances: tool({
       description:
         "Get current balances for all linked bank accounts — checking, savings, and credit cards.",
@@ -256,4 +273,16 @@ export function buildTools(userId: number) {
       },
     }),
   };
+
+  // If this phase has a restricted tool set, filter down
+  const allowed = RESTRICTED_PHASES[phase];
+  if (!allowed) return allTools;
+
+  const filtered: Record<string, (typeof allTools)[keyof typeof allTools]> = {};
+  for (const name of allowed) {
+    if (name in allTools) {
+      filtered[name] = allTools[name as keyof typeof allTools];
+    }
+  }
+  return filtered;
 }

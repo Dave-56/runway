@@ -134,7 +134,7 @@ export async function processMessage(
   ];
 
   // 4. Call LLM with tools — allow up to 5 steps for tool calling loops
-  const tools = buildTools(dbUser.id);
+  const tools = buildTools(dbUser.id, dbUser.phase);
   const result = await callLLM({
     systemPrompt,
     messages,
