@@ -84,7 +84,7 @@ export async function POST(request: Request) {
       if (dbUser) {
         await sendMessage(
           dbUser.telegramChatId,
-          "Got your accounts linked. I've pulled your recurring charges. Say hi when you're ready to see the numbers.",
+          "Linked. I've got your numbers.",
         );
       }
     } catch (err) {
