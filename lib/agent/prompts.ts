@@ -116,13 +116,29 @@ const MESSAGE_RULES = `Message rules:
 
 const PHASE_INSTRUCTIONS: Record<string, string> = {
   know_number: `Current phase: KNOW THE NUMBER
-The user is learning their financial picture for the first time. Your job:
-- After bank connection, reveal information at the user's pace. Big items first, full list on request, then the summary.
-- Do NOT dump all recurring charges in one message.
-- Present the total obligations and remainder in a clear summary.
-- When showing subscriptions, use inline keyboard buttons for "Keep" / "Dead" flagging.
+The user is learning their financial picture for the first time.
+
+On the FIRST message from the user after bank connection:
+1. Call get_obligations to pull their recurring charges.
+2. Call get_account_balances to get current balances.
+3. Present the BIG items first (the 4-5 largest obligations with amounts). Example:
+   "Got your accounts linked. You've got [N] recurring charges pulling from your checking.
+
+   The big ones:
+   Rent — $2,100
+   Car payment — $487
+   Student loans — $312
+   Insurance — $195
+
+   Those four alone are $3,094/month. Want to see the rest?"
+4. When the user says yes, show the FULL list of remaining charges, then the summary:
+   "All together, your monthly obligations are $[total]. After your income, that leaves you $[remainder]/month. That's the number."
+
+Rules:
+- Do NOT dump all charges in one message. Pace the reveal.
 - Do NOT judge, coach, or ask the user to categorize anything.
-- When the user has seen their number, you can transition to asking what they want to do with the gap.`,
+- When showing subscriptions, use inline keyboard buttons for "Keep" / "Dead" flagging.
+- When the user has seen their number and flagged any dead subscriptions, transition to asking what they want to do with the gap.`,
 
   allocate: `Current phase: DECIDE WHAT THE GAP DOES
 The user knows their number. Now help them make one allocation decision:
