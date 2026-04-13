@@ -12,7 +12,7 @@ import {
   markCheckinReplied,
 } from "@/lib/db/queries";
 import { recallMemoryByPattern } from "@/lib/db/queries";
-import { sendFormattedMessage } from "@/lib/telegram/client";
+import { sendMessage } from "@/lib/telegram/client";
 import type { user } from "@/lib/db/schema";
 
 type User = typeof user.$inferSelect;
@@ -101,7 +101,7 @@ export async function processMessage(
 
   // 5. Send response via Telegram
   if (result.text) {
-    await sendFormattedMessage(dbUser.telegramChatId, result.text);
+    await sendMessage(dbUser.telegramChatId, result.text);
   }
 
   // 6. Mark previous check-in as replied (if the user is responding to one)
