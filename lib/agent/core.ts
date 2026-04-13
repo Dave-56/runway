@@ -2,6 +2,7 @@ import { ModelMessage } from "ai";
 import { callLLM } from "./provider";
 import { buildTools } from "./tools";
 import { buildSystemPrompt, SystemPromptContext } from "./prompts";
+import { validateNumbers } from "./validate";
 import {
   getActiveObligations,
   getObligationsTotal,
@@ -142,18 +143,29 @@ export async function processMessage(
     maxSteps: 5,
   });
 
-  // 5. Send response via Telegram
+  // 5. Validate dollar amounts against tool results before sending
+  if (result.text && result.toolResults.length) {
+    const validation = validateNumbers(result.text, result.toolResults);
+    if (!validation.valid) {
+      console.warn(
+        `[validateNumbers] Possible hallucinated amounts for user ${dbUser.id}:`,
+        validation.mismatches.map((n) => `$${n}`),
+      );
+    }
+  }
+
+  // 6. Send response via Telegram
   if (result.text) {
     await sendMessage(dbUser.telegramChatId, result.text);
   }
 
-  // 5b. Persist both sides of the conversation
+  // 6b. Persist both sides of the conversation
   await saveConversationMessage(dbUser.id, "user", userContent);
   if (result.text) {
     await saveConversationMessage(dbUser.id, "assistant", result.text);
   }
 
-  // 6. Mark previous check-in as replied (if the user is responding to one)
+  // 7. Mark previous check-in as replied (if the user is responding to one)
   if (recentCheckins.length > 0) {
     const lastCheckin = recentCheckins[0];
     if (!lastCheckin.userReplied && lastCheckin.telegramMessageId) {
@@ -161,12 +173,12 @@ export async function processMessage(
     }
   }
 
-  // 7. Reset ignored check-ins counter on any user interaction
+  // 8. Reset ignored check-ins counter on any user interaction
   if (dbUser.ignoredCheckins > 0) {
     await updateUser(dbUser.id, { ignoredCheckins: 0 });
   }
 
-  // 8. Reactivate if the user was silenced and is now messaging back
+  // 9. Reactivate if the user was silenced and is now messaging back
   if (!dbUser.active) {
     await updateUser(dbUser.id, { active: true, ignoredCheckins: 0 });
   }
