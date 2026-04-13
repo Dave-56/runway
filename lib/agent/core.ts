@@ -1,14 +1,17 @@
-import { ModelMessage } from "ai";
+import type { ModelMessage } from "ai";
 import { callLLM } from "./provider";
 import { buildTools } from "./tools";
 import { buildSystemPrompt, SystemPromptContext } from "./prompts";
-import { validateNumbers } from "./validate";
+import { classifyIntent, extractMoneyAmount } from "./router";
+import { buildRoutedAction } from "./routing-plan";
+import { extractToolNumbers, validateNumbers } from "./validate";
 import {
   getActiveObligations,
   getObligationsTotal,
   getAllocation,
   getDebts,
   getRecentCheckins,
+  upsertAllocation,
   updateUser,
   markCheckinReplied,
   getPlaidConnection,
@@ -19,9 +22,65 @@ import {
 import { sendMessage, sendMessageWithUrlButton } from "@/lib/telegram/client";
 import { createLinkToken } from "@/lib/plaid/client";
 import { escapeMarkdownV2 } from "@/lib/telegram/format";
+import { computeGap } from "@/lib/harness/calculations";
+import { formatCurrency } from "@/lib/utils/money";
 import type { user } from "@/lib/db/schema";
 
 type User = typeof user.$inferSelect;
+
+function formatVerifiedAmounts(toolResults: unknown[]): string {
+  const values = extractToolNumbers(toolResults)
+    .map((value) => Math.round(value * 100) / 100)
+    .filter((value) => Number.isFinite(value));
+  const unique = Array.from(new Set(values));
+  return unique
+    .slice(0, 30)
+    .map((value) => formatCurrency(value))
+    .join(", ");
+}
+
+interface FinalizeInteractionInput {
+  dbUser: User;
+  userContent: string;
+  finalText: string;
+  recentCheckins: Array<{
+    userReplied: boolean;
+    telegramMessageId: number | null;
+  }>;
+  reactivateIfSilent?: boolean;
+}
+
+async function finalizeInteraction({
+  dbUser,
+  userContent,
+  finalText,
+  recentCheckins,
+  reactivateIfSilent = true,
+}: FinalizeInteractionInput): Promise<void> {
+  if (finalText) {
+    await sendMessage(dbUser.telegramChatId, finalText);
+  }
+
+  await saveConversationMessage(dbUser.id, "user", userContent);
+  if (finalText) {
+    await saveConversationMessage(dbUser.id, "assistant", finalText);
+  }
+
+  if (recentCheckins.length > 0) {
+    const lastCheckin = recentCheckins[0];
+    if (!lastCheckin.userReplied && lastCheckin.telegramMessageId) {
+      await markCheckinReplied(lastCheckin.telegramMessageId);
+    }
+  }
+
+  if (dbUser.ignoredCheckins > 0) {
+    await updateUser(dbUser.id, { ignoredCheckins: 0 });
+  }
+
+  if (reactivateIfSilent && !dbUser.active) {
+    await updateUser(dbUser.id, { active: true, ignoredCheckins: 0 });
+  }
+}
 
 /**
  * Process an incoming user message (text or callback button tap).
@@ -73,7 +132,66 @@ export async function processMessage(
       getRecentConversation(dbUser.id, 10),
     ]);
 
-  // 2. Build system prompt
+  // 2. Build messages with conversation history for multi-turn context
+  const userContent = callbackData
+    ? `[User tapped button: "${callbackData}"]`
+    : text;
+
+  const historyMessages: ModelMessage[] = conversationHistory.map((msg) => ({
+    role: msg.role as "user" | "assistant",
+    content: msg.content,
+  }));
+  const messages: ModelMessage[] = [
+    ...historyMessages,
+    { role: "user", content: userContent },
+  ];
+
+  // 3. Hybrid router: deterministic intent checks first, lightweight classifier second
+  const intentDecision = await classifyIntent({
+    text,
+    phase: dbUser.phase,
+    callbackData,
+    conversationHistory: historyMessages,
+    hasMonthlyIncome: allocation?.monthlyIncome != null,
+  });
+
+  const routedAction = buildRoutedAction(
+    {
+      userId: dbUser.id,
+      phase: dbUser.phase,
+      intent: intentDecision.intent,
+      text,
+      obligationsTotal,
+      obligations: obligations.map((o) => ({
+        merchantName: o.merchantName,
+        amount: o.amount,
+      })),
+      allocation: allocation
+        ? { monthlyIncome: allocation.monthlyIncome, gap: allocation.gap }
+        : null,
+    },
+    { extractMoneyAmount, formatCurrency, computeGap },
+  );
+
+  if (routedAction) {
+    if (routedAction.allocationUpdate) {
+      await upsertAllocation(routedAction.allocationUpdate);
+    }
+    if (routedAction.userUpdate) {
+      await updateUser(dbUser.id, routedAction.userUpdate);
+    }
+
+    await finalizeInteraction({
+      dbUser,
+      userContent,
+      finalText: routedAction.finalText,
+      recentCheckins,
+      reactivateIfSilent: routedAction.reactivateIfSilent,
+    });
+    return;
+  }
+
+  // 4. Build system prompt
   const promptContext: SystemPromptContext = {
     phase: dbUser.phase,
     obligations: obligations.map((o) => ({
@@ -120,21 +238,7 @@ export async function processMessage(
 
   const systemPrompt = buildSystemPrompt(promptContext);
 
-  // 3. Build messages with conversation history for multi-turn context
-  const userContent = callbackData
-    ? `[User tapped button: "${callbackData}"]`
-    : text;
-
-  const historyMessages: ModelMessage[] = conversationHistory.map((msg) => ({
-    role: msg.role as "user" | "assistant",
-    content: msg.content,
-  }));
-  const messages: ModelMessage[] = [
-    ...historyMessages,
-    { role: "user", content: userContent },
-  ];
-
-  // 4. Call LLM with tools — allow up to 5 steps for tool calling loops
+  // 5. Call LLM with tools — allow up to 5 steps for tool calling loops
   const tools = buildTools(dbUser.id, dbUser.phase);
   const result = await callLLM({
     systemPrompt,
@@ -143,43 +247,53 @@ export async function processMessage(
     maxSteps: 5,
   });
 
-  // 5. Validate dollar amounts against tool results before sending
-  if (result.text && result.toolResults.length) {
-    const validation = validateNumbers(result.text, result.toolResults);
+  // 6. Validate dollar amounts against tool results before sending (fail closed)
+  let finalText = result.text;
+  if (finalText && result.toolResults.length) {
+    let validation = validateNumbers(finalText, result.toolResults);
     if (!validation.valid) {
       console.warn(
-        `[validateNumbers] Possible hallucinated amounts for user ${dbUser.id}:`,
+        `[validateNumbers] Blocking mismatched amounts for user ${dbUser.id}:`,
         validation.mismatches.map((n) => `$${n}`),
       );
+
+      const verifiedAmounts = formatVerifiedAmounts(result.toolResults);
+      const retry = await callLLM({
+        systemPrompt,
+        messages: [
+          ...messages,
+          { role: "assistant", content: finalText },
+          {
+            role: "user",
+            content: [
+              "Rewrite your previous response.",
+              "Use only verified dollar amounts from this list:",
+              verifiedAmounts || "(none)",
+              "If you are not certain about an amount, do not include a dollar amount.",
+              "Keep the same tone and answer the user's request directly.",
+            ].join("\n"),
+          },
+        ],
+        maxSteps: 1,
+      });
+
+      finalText = retry.text;
+      validation = validateNumbers(finalText, result.toolResults);
+
+      if (!validation.valid) {
+        console.warn(
+          `[validateNumbers] Retry failed for user ${dbUser.id}; sending safe fallback.`,
+        );
+        finalText =
+          "I pulled your data, but I’m double-checking the exact numbers so I don’t send you a wrong amount. Ask me again in a moment.";
+      }
     }
   }
 
-  // 6. Send response via Telegram
-  if (result.text) {
-    await sendMessage(dbUser.telegramChatId, result.text);
-  }
-
-  // 6b. Persist both sides of the conversation
-  await saveConversationMessage(dbUser.id, "user", userContent);
-  if (result.text) {
-    await saveConversationMessage(dbUser.id, "assistant", result.text);
-  }
-
-  // 7. Mark previous check-in as replied (if the user is responding to one)
-  if (recentCheckins.length > 0) {
-    const lastCheckin = recentCheckins[0];
-    if (!lastCheckin.userReplied && lastCheckin.telegramMessageId) {
-      await markCheckinReplied(lastCheckin.telegramMessageId);
-    }
-  }
-
-  // 8. Reset ignored check-ins counter on any user interaction
-  if (dbUser.ignoredCheckins > 0) {
-    await updateUser(dbUser.id, { ignoredCheckins: 0 });
-  }
-
-  // 9. Reactivate if the user was silenced and is now messaging back
-  if (!dbUser.active) {
-    await updateUser(dbUser.id, { active: true, ignoredCheckins: 0 });
-  }
+  await finalizeInteraction({
+    dbUser,
+    userContent,
+    finalText,
+    recentCheckins,
+  });
 }

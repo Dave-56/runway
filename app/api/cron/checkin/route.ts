@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { ModelMessage } from "ai";
 import {
   getActiveUsers,
   getPlaidConnection,
@@ -13,24 +12,22 @@ import {
   createCheckinLog,
   updateUser,
   updateCursor,
-  recallMemoryByPattern,
 } from "@/lib/db/queries";
 import { getAccountBalances } from "@/lib/plaid/balances";
 import { syncTransactions } from "@/lib/plaid/transactions";
 import {
-  buildSystemPrompt,
-  buildCheckinPrompt,
-  type SystemPromptContext,
-  type CheckinPromptData,
-} from "@/lib/agent/prompts";
-import { callLLM } from "@/lib/agent/provider";
+  buildSpendingPaceNote,
+  renderCheckinMessage,
+  type CheckinDebtProgressItem,
+  type CheckinUpcomingSubItem,
+} from "@/lib/harness/messages";
 import {
   sendFormattedMessage,
   sendMessageWithKeyboard,
 } from "@/lib/telegram/client";
 import { escapeMarkdownV2 } from "@/lib/telegram/format";
 import { isCheckinWindow, daysUntil } from "@/lib/utils/dates";
-import { formatCurrency } from "@/lib/utils/money";
+import { computeFreeCashRemaining } from "@/lib/harness/calculations";
 
 export const dynamic = "force-dynamic";
 
@@ -89,14 +86,13 @@ export async function GET(req: NextRequest) {
     await updateCursor(plaidConn.id, syncResult.nextCursor);
 
     // 6. Get balances and debts, create snapshots
-    const [balances, debts, activeObligations, obligationsTotal, allocationData, memories, recentCheckins] =
+    const [balances, debts, activeObligations, obligationsTotal, allocationData, recentCheckins] =
       await Promise.all([
         getAccountBalances(plaidConn.accessToken),
         getDebts(theUser.id),
         getActiveObligations(theUser.id),
         getObligationsTotal(theUser.id),
         getAllocation(theUser.id),
-        recallMemoryByPattern(theUser.id, "%"),
         getRecentCheckins(theUser.id, 5),
       ]);
 
@@ -107,36 +103,21 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // 7. Calculate check-in data
-
-    // Free cash: checking balance minus remaining obligations for the month
-    const freeCashRemaining = balances.totalChecking - obligationsTotal;
-
-    // Spending pace: compare to previous check-in
-    let spendingPaceNote = "No previous check-in to compare against.";
+    // 7. Calculate strict payload (code owns values)
+    const freeCashRemaining = computeFreeCashRemaining(
+      balances.totalChecking,
+      obligationsTotal,
+    );
     const previousCheckins = recentCheckins.filter(
       (c) => c.type === "weekly_checkin",
     );
-    if (previousCheckins.length > 0) {
-      // Simple pace note based on free cash trend
-      const lastCheckinText = previousCheckins[0].messageText ?? "";
-      // Extract any dollar amount from the last check-in for rough comparison
-      const amountMatch = lastCheckinText.match(/\$[\d,]+(?:\.\d{2})?/);
-      if (amountMatch) {
-        const lastAmount = parseFloat(amountMatch[0].replace(/[$,]/g, ""));
-        if (freeCashRemaining > lastAmount) {
-          spendingPaceNote = `Up from ${formatCurrency(lastAmount)} last week. Lighter spending.`;
-        } else if (freeCashRemaining < lastAmount) {
-          const diff = lastAmount - freeCashRemaining;
-          spendingPaceNote = `Down ${formatCurrency(diff)} from last week.`;
-        } else {
-          spendingPaceNote = "About the same as last week.";
-        }
-      }
-    }
+    const spendingPaceNote = buildSpendingPaceNote(
+      freeCashRemaining,
+      allocationData?.gap ?? null,
+    );
 
     // Upcoming subs: obligations with nextExpectedDate within 5 days
-    const upcomingSubs: CheckinPromptData["upcomingSubs"] = [];
+    const upcomingSubs: CheckinUpcomingSubItem[] = [];
     for (const ob of activeObligations) {
       if (ob.nextExpectedDate) {
         const nextDate = new Date(ob.nextExpectedDate);
@@ -152,7 +133,7 @@ export async function GET(req: NextRequest) {
     }
 
     // Debt progress: compare current balances to previous snapshots
-    const debtProgress: CheckinPromptData["debtProgress"] = [];
+    const debtProgress: CheckinDebtProgressItem[] = [];
     for (const d of debts) {
       if (d.currentBalance == null) continue;
       const snapshots = await getDebtSnapshots(d.id);
@@ -168,77 +149,25 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    // 8. Build prompts and call LLM
-    const systemPromptCtx: SystemPromptContext = {
-      phase: theUser.phase,
-      obligations: activeObligations.map((ob) => ({
-        id: ob.id,
-        merchantName: ob.merchantName,
-        amount: ob.amount,
-        frequency: ob.frequency,
-        nextExpectedDate: ob.nextExpectedDate,
-        category: ob.category,
-        isSubscription: ob.isSubscription,
-        status: ob.status,
-      })),
-      obligationsTotal,
-      allocation: allocationData
-        ? {
-            monthlyIncome: allocationData.monthlyIncome,
-            obligationsTotal: allocationData.obligationsTotal,
-            gap: allocationData.gap,
-            debtAmount: allocationData.debtAmount,
-            cushionAmount: allocationData.cushionAmount,
-            livingAmount: allocationData.livingAmount,
-            strategy: allocationData.strategy,
-          }
-        : null,
-      debts: debts.map((d) => ({
-        accountName: d.accountName,
-        currentBalance: d.currentBalance,
-        interestRate: d.interestRate,
-        minimumPayment: d.minimumPayment,
-      })),
-      memories: memories.map((m) => ({
-        key: m.key,
-        value: m.value,
-        type: m.type,
-        source: m.source,
-        updatedAt: m.updatedAt,
-      })),
-      recentCheckins: recentCheckins.map((c) => ({
-        type: c.type,
-        messageText: c.messageText,
-        sentAt: c.sentAt,
-      })),
-    };
-
-    const systemPrompt = buildSystemPrompt(systemPromptCtx);
-
-    const checkinPrompt = buildCheckinPrompt({
+    // 8. Render message from payload only (no free-form numeric generation)
+    const finalCheckinText = renderCheckinMessage({
       freeCashRemaining,
       spendingPaceNote,
       upcomingSubs,
       debtProgress,
     });
 
-    const messages: ModelMessage[] = [
-      { role: "user", content: checkinPrompt },
-    ];
-
-    const llmResult = await callLLM({ systemPrompt, messages });
-
     // 9. Send via Telegram
     const telegramMessageId = await sendFormattedMessage(
       theUser.telegramChatId,
-      llmResult.text,
+      finalCheckinText,
     );
 
     // 10. Log in checkin_log
     await createCheckinLog({
       userId: theUser.id,
       type: "weekly_checkin",
-      messageText: llmResult.text,
+      messageText: finalCheckinText,
       telegramMessageId,
     });
 

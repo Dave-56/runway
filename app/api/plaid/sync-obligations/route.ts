@@ -9,6 +9,11 @@ import { getRecurringCharges } from "@/lib/plaid/recurring";
 import { decrypt } from "@/lib/utils/crypto";
 import { normalizeToMonthly } from "@/lib/utils/money";
 import { NextResponse } from "next/server";
+import {
+  computeGap,
+  roundMoney,
+  sumMoney,
+} from "@/lib/harness/calculations";
 
 /**
  * One-time utility route to backfill obligations from an existing Plaid connection.
@@ -44,11 +49,11 @@ export async function GET(request: Request) {
   const { outflows, inflows } = await getRecurringCharges(conn.accessToken, allAccountIds);
 
   // Upsert into obligations table
-  let obligationsTotal = 0;
+  const monthlyOutflowAmounts: number[] = [];
   let count = 0;
   for (const charge of outflows) {
     const monthlyAmount = normalizeToMonthly(charge.amount, charge.frequency);
-    obligationsTotal += monthlyAmount;
+    monthlyOutflowAmounts.push(monthlyAmount);
     await upsertObligation({
       userId: user.id,
       plaidStreamId: charge.streamId,
@@ -62,27 +67,30 @@ export async function GET(request: Request) {
     });
     count++;
   }
+  const obligationsTotal = sumMoney(monthlyOutflowAmounts);
 
   // Compute monthly income from recurring inflows and store
-  const monthlyIncome = inflows.reduce(
-    (sum, i) => sum + normalizeToMonthly(i.amount, i.frequency),
-    0,
+  const monthlyIncome = sumMoney(
+    inflows.map((inflow) =>
+      normalizeToMonthly(inflow.amount, inflow.frequency),
+    ),
   );
+  const gap = computeGap(monthlyIncome, obligationsTotal);
 
   if (monthlyIncome > 0) {
     await upsertAllocation({
       userId: user.id,
-      monthlyIncome: Math.round(monthlyIncome * 100) / 100,
-      obligationsTotal: Math.round(obligationsTotal * 100) / 100,
-      gap: Math.round((monthlyIncome - obligationsTotal) * 100) / 100,
+      monthlyIncome: roundMoney(monthlyIncome),
+      obligationsTotal: roundMoney(obligationsTotal),
+      gap,
     });
   }
 
   return NextResponse.json({
     success: true,
     obligations_synced: count,
-    monthly_income: Math.round(monthlyIncome * 100) / 100,
-    obligations_total: Math.round(obligationsTotal * 100) / 100,
-    gap: Math.round((monthlyIncome - obligationsTotal) * 100) / 100,
+    monthly_income: roundMoney(monthlyIncome),
+    obligations_total: roundMoney(obligationsTotal),
+    gap,
   });
 }

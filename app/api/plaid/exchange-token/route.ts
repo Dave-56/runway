@@ -4,11 +4,11 @@ import {
   createPlaidConnection,
   getUserById,
   upsertObligation,
-  upsertAllocation,
 } from "@/lib/db/queries";
 import { getRecurringCharges } from "@/lib/plaid/recurring";
 import { normalizeToMonthly } from "@/lib/utils/money";
 import { processMessage } from "@/lib/agent/core";
+import { BANK_LINKED_SIGNAL } from "@/lib/agent/router";
 
 export async function POST(request: Request) {
   try {
@@ -43,13 +43,11 @@ export async function POST(request: Request) {
       });
       const allAccountIds = balanceResponse.data.accounts.map((a) => a.account_id);
 
-      const { outflows, inflows } = await getRecurringCharges(encryptedToken, allAccountIds);
+      const { outflows } = await getRecurringCharges(encryptedToken, allAccountIds);
 
       // Upsert each recurring charge into the obligations table
-      let obligationsTotal = 0;
       for (const charge of outflows) {
         const monthlyAmount = normalizeToMonthly(charge.amount, charge.frequency);
-        obligationsTotal += monthlyAmount;
         await upsertObligation({
           userId: Number(user_id),
           plaidStreamId: charge.streamId,
@@ -63,26 +61,10 @@ export async function POST(request: Request) {
         });
       }
 
-      // Compute monthly income from recurring inflows
-      const monthlyIncome = inflows.reduce(
-        (sum, i) => sum + normalizeToMonthly(i.amount, i.frequency),
-        0,
-      );
-
-      // Store income and gap so the agent has these numbers immediately
-      if (monthlyIncome > 0) {
-        await upsertAllocation({
-          userId: Number(user_id),
-          monthlyIncome: Math.round(monthlyIncome * 100) / 100,
-          obligationsTotal: Math.round(obligationsTotal * 100) / 100,
-          gap: Math.round((monthlyIncome - obligationsTotal) * 100) / 100,
-        });
-      }
-
       // Trigger the agent to deliver Phase 1 immediately — no waiting
       const dbUser = await getUserById(Number(user_id));
       if (dbUser) {
-        await processMessage(dbUser, "[Bank accounts just linked — deliver the numbers]");
+        await processMessage(dbUser, BANK_LINKED_SIGNAL);
       }
     } catch (err) {
       console.error("Failed to fetch recurring charges after linking:", err);

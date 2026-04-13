@@ -1,0 +1,69 @@
+{
+  "outflow_streams": [
+    {
+      "stream_id": "stream_rent_001",
+      "merchant_name": "Oak Street Apartments",
+      "description": "RENT PAYMENT",
+      "average_amount": { "amount": 2100 },
+      "frequency": "MONTHLY",
+      "predicted_next_date": "2026-04-20",
+      "is_active": true
+    },
+    {
+      "stream_id": "stream_car_001",
+      "merchant_name": "Metro Auto Finance",
+      "description": "CAR LOAN",
+      "average_amount": { "amount": 487 },
+      "frequency": "MONTHLY",
+      "predicted_next_date": "2026-04-18",
+      "is_active": true
+    },
+    {
+      "stream_id": "stream_insurance_001",
+      "merchant_name": "Horizon Insurance",
+      "description": "INSURANCE",
+      "average_amount": { "amount": 195 },
+      "frequency": "MONTHLY",
+      "predicted_next_date": "2026-04-25",
+      "is_active": true
+    },
+    {
+      "stream_id": "stream_streaming_001",
+      "merchant_name": "StreamFlix",
+      "description": "STREAMING SUBSCRIPTION",
+      "average_amount": { "amount": 18.99 },
+      "frequency": "MONTHLY",
+      "predicted_next_date": "2026-04-17",
+      "is_active": true
+    },
+    {
+      "stream_id": "stream_gym_001",
+      "merchant_name": "Anytime Gym",
+      "description": "GYM MEMBERSHIP",
+      "average_amount": { "amount": 24.99 },
+      "frequency": "MONTHLY",
+      "predicted_next_date": "2026-04-22",
+      "is_active": true
+    }
+  ],
+  "inflow_streams": [
+    {
+      "stream_id": "stream_payroll_001",
+      "merchant_name": "Acme Corp Payroll",
+      "description": "PAYROLL DEPOSIT",
+      "average_amount": { "amount": 2900 },
+      "frequency": "BIWEEKLY",
+      "predicted_next_date": "2026-04-16",
+      "is_active": true
+    },
+    {
+      "stream_id": "stream_sidegig_001",
+      "merchant_name": "Freelance Client",
+      "description": "SIDE INCOME",
+      "average_amount": { "amount": 600 },
+      "frequency": "MONTHLY",
+      "predicted_next_date": "2026-04-28",
+      "is_active": true
+    }
+  ]
+}

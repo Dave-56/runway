@@ -4,11 +4,16 @@
  * against values returned by tool calls in the same request.
  */
 
-const DOLLAR_RE = /\$[\d,]+(?:\.\d{1,2})?/g;
+const DOLLAR_RE = /-?\$[\d,]+(?:\.\d{1,2})?/g;
+const NUMERIC_STRING_RE = /^-?\d+(?:\.\d+)?$/;
+
+type ValidationOptions = {
+  requireAmount?: boolean;
+};
 
 /** Parse "$1,234.56" → 1234.56 */
 function parseDollar(raw: string): number {
-  return parseFloat(raw.replace(/[$,]/g, ""));
+  return parseFloat(raw.replace(/[$,]/g, "").trim());
 }
 
 /** Extract all dollar amounts from response text. */
@@ -18,19 +23,38 @@ export function extractDollarAmounts(text: string): number[] {
   return matches.map(parseDollar).filter((n) => !isNaN(n));
 }
 
-/** Recursively collect all numbers from tool results. */
-export function extractToolNumbers(obj: unknown): number[] {
+const MONEY_KEY_RE =
+  /(amount|balance|income|gap|total|payment|interest|cash|spent|threshold)/i;
+const NON_MONEY_KEY_RE = /(id|count|days|months|transactions|year)/i;
+
+function shouldIncludeKey(key: string): boolean {
+  if (NON_MONEY_KEY_RE.test(key)) return false;
+  return MONEY_KEY_RE.test(key);
+}
+
+/** Recursively collect likely-money numbers from tool results. */
+export function extractToolNumbers(
+  obj: unknown,
+  parentKey?: string,
+): number[] {
   if (obj == null) return [];
-  if (typeof obj === "number") return [obj];
-  if (Array.isArray(obj)) return obj.flatMap(extractToolNumbers);
+  if (typeof obj === "number") {
+    if (parentKey && !shouldIncludeKey(parentKey)) return [];
+    return [obj];
+  }
+  if (Array.isArray(obj)) {
+    return obj.flatMap((item) => extractToolNumbers(item, parentKey));
+  }
   if (typeof obj === "object") {
-    return Object.values(obj as Record<string, unknown>).flatMap(
-      extractToolNumbers,
+    return Object.entries(obj as Record<string, unknown>).flatMap(([key, value]) =>
+      extractToolNumbers(value, key),
     );
   }
-  // Try parsing string numbers (e.g. "1234.56")
+
+  // Parse numeric strings only when they are purely numeric
   if (typeof obj === "string") {
-    const n = parseFloat(obj);
+    if (!NUMERIC_STRING_RE.test(obj.trim())) return [];
+    const n = parseFloat(obj.trim());
     return isNaN(n) ? [] : [n];
   }
   return [];
@@ -42,6 +66,11 @@ export function extractToolNumbers(obj: unknown): number[] {
  */
 function hasMatch(amount: number, toolNums: number[]): boolean {
   return toolNums.some((n) => Math.abs(n - amount) < 0.02);
+}
+
+function normalizeNumbers(values: number[]): number[] {
+  const rounded = values.map((value) => Math.round(value * 100) / 100);
+  return Array.from(new Set(rounded));
 }
 
 export interface ValidationResult {
@@ -58,16 +87,42 @@ export interface ValidationResult {
 export function validateNumbers(
   text: string,
   toolResults: unknown[],
+  options: ValidationOptions = {},
 ): ValidationResult {
-  // Nothing to validate if no tools were called
-  if (!toolResults.length) return { valid: true, mismatches: [] };
-
   const textAmounts = extractDollarAmounts(text);
+  if (options.requireAmount && textAmounts.length === 0) {
+    return { valid: false, mismatches: [] };
+  }
   if (!textAmounts.length) return { valid: true, mismatches: [] };
 
-  const toolNums = extractToolNumbers(toolResults);
-  if (!toolNums.length) return { valid: true, mismatches: [] };
+  // Nothing to validate against if no tools were called
+  if (!toolResults.length) return { valid: false, mismatches: textAmounts };
+
+  const toolNums = normalizeNumbers(extractToolNumbers(toolResults));
+  if (!toolNums.length) return { valid: false, mismatches: textAmounts };
 
   const mismatches = textAmounts.filter((a) => !hasMatch(a, toolNums));
+  return { valid: mismatches.length === 0, mismatches };
+}
+
+/**
+ * Validate dollar amounts against an explicit set of allowed values.
+ * Useful when values are computed by the harness (cron prompts) and no tools were called.
+ */
+export function validateNumbersAgainstExpected(
+  text: string,
+  expectedAmounts: number[],
+  options: ValidationOptions = {},
+): ValidationResult {
+  const textAmounts = extractDollarAmounts(text);
+  if (options.requireAmount && textAmounts.length === 0) {
+    return { valid: false, mismatches: [] };
+  }
+  if (!textAmounts.length) return { valid: true, mismatches: [] };
+
+  const allowed = normalizeNumbers(expectedAmounts);
+  if (!allowed.length) return { valid: false, mismatches: textAmounts };
+
+  const mismatches = textAmounts.filter((a) => !hasMatch(a, allowed));
   return { valid: mismatches.length === 0, mismatches };
 }

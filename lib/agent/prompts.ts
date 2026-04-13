@@ -1,4 +1,5 @@
 import { formatCurrency } from "@/lib/utils/money";
+import { loadVoiceContracts } from "./voice-contract";
 
 // ── Types ─────────────────────────────────────────────────────────────
 
@@ -70,37 +71,10 @@ export interface AlertPromptData {
 
 // ── Identity & Voice ──────────────────────────────────────────────────
 
-const IDENTITY = `You are Clearline. You speak in first person. You are a sharp friend who's good with money — not a financial advisor, not a chatbot, not a coach.
-
-Identity rules:
-- Never introduce yourself. Never say your name. Never say "I'm here to help" or anything like it. You're already in the conversation — just get to the numbers.
-- Never offer a menu of options. Don't say "I can show you X, Y, or Z." Answer what was asked, then stop. If the user wants more, they'll ask.
-- Never guess or fabricate explanations for numbers. If you're not sure what a number means or why it changed, say the number and stop. The user will ask if they want more.
-- State facts from the tools you called. Don't invent context, don't editorialize on what a balance "means" unless the user asks.
-
-Voice rules:
-- Direct. Lead with the point. No preamble, no softening.
-- Honest. If the numbers are bad, say so plainly. No euphemisms.
-- Calm. Deliver everything — good and bad — like it's not a big deal.
-- Trusting. The user is an adult. State the facts, skip the advice unless asked.
-- Dry, never performative. Observational humor is fine when natural. "Uber Eats had a good week" works. "Looks like someone was hungry! lol" does not.
-- Short. If the answer is one line, send one line. Don't pad with follow-up offers or pleasantries.
-
-Never say:
-- "Great job!" / "You're doing great!" / "Every step counts!"
-- "Financial wellness" / "financial journey" / "money goals"
-- "You got this!" / "Keep it up!" / "Proud of you!"
-- "Let's get started!" / "Ready to take control?"
-- "I'm here to help" / "I'm Clearline" / "My name is..."
-- "Would you like to see..." / "I can also show you..." / "Anything else?"
-- Any motivational, cheerleading, or fintech-marketing language
-
-Do say things like:
-- "Here's the deal."
-- "Heads up —"
-- "Quick one."
-- "Tough week." (for bad numbers)
-- "Still here if you want to pick this up." (after long silence, once)`;
+function buildIdentitySoulSection(): string {
+  const { identityText: identity, soulText: soul } = loadVoiceContracts();
+  return `Agent identity contract:\n${identity}\n\nAgent soul contract:\n${soul}`;
+}
 
 // ── Message Rules ─────────────────────────────────────────────────────
 
@@ -145,7 +119,7 @@ When you see "[Bank accounts just linked — deliver the numbers]" or this is th
 
 Rules:
 - Do NOT dump all charges in one message. Pace the reveal.
-- Do NOT judge, coach, or ask the user to categorize anything.
+- Do NOT shame or preach. You can call out financially bad moves clearly when relevant.
 - Do NOT try to infer income from bank balances. Ask for it directly.
 - Do NOT use a stored gap value when the user just gave you their income. Compute it: income minus obligations total.
 - When showing subscriptions, use inline keyboard buttons for "Keep" / "Dead" flagging.
@@ -173,7 +147,7 @@ The user has their number and an allocation. Your job now:
 // ── Prompt Builders ───────────────────────────────────────────────────
 
 export function buildSystemPrompt(ctx: SystemPromptContext): string {
-  const sections: string[] = [IDENTITY, MESSAGE_RULES];
+  const sections: string[] = [buildIdentitySoulSection(), MESSAGE_RULES];
 
   // Phase
   sections.push(PHASE_INSTRUCTIONS[ctx.phase] || PHASE_INSTRUCTIONS.know_number);

@@ -15,6 +15,11 @@ import {
 import { getAccountBalances } from "@/lib/plaid/balances";
 import { syncTransactions } from "@/lib/plaid/transactions";
 import { updateCursor } from "@/lib/db/queries";
+import {
+  calculateDebtPayoff,
+  computeGap,
+  roundMoney,
+} from "@/lib/harness/calculations";
 
 /**
  * Phases where only a subset of tools is exposed.
@@ -100,35 +105,7 @@ export function buildTools(userId: number, phase: string) {
         monthly_payment: z.number().describe("Monthly payment amount in dollars"),
       }),
       execute: async ({ balance, rate, monthly_payment }) => {
-        if (monthly_payment <= 0) {
-          return { error: "Monthly payment must be greater than zero." };
-        }
-
-        const monthlyRate = rate / 100 / 12;
-
-        // Interest-free debt
-        if (monthlyRate === 0) {
-          const months = Math.ceil(balance / monthly_payment);
-          return { months, totalInterest: 0, totalPaid: balance };
-        }
-
-        // Check if payment covers at least the interest
-        const monthlyInterest = balance * monthlyRate;
-        if (monthly_payment <= monthlyInterest) {
-          return {
-            error: `Payment of $${monthly_payment} doesn't cover monthly interest of $${monthlyInterest.toFixed(2)}. Need to pay more than that.`,
-          };
-        }
-
-        // Standard amortization formula: n = -log(1 - (r*PV)/PMT) / log(1+r)
-        const months = Math.ceil(
-          -Math.log(1 - (monthlyRate * balance) / monthly_payment) /
-            Math.log(1 + monthlyRate),
-        );
-        const totalPaid = months * monthly_payment;
-        const totalInterest = Math.round((totalPaid - balance) * 100) / 100;
-
-        return { months, totalInterest, totalPaid: Math.round(totalPaid * 100) / 100 };
+        return calculateDebtPayoff(balance, rate, monthly_payment);
       },
     }),
 
@@ -185,12 +162,12 @@ export function buildTools(userId: number, phase: string) {
           .map(([name, data]) => ({
             merchant: name,
             transactions: data.count,
-            total: Math.round(data.total * 100) / 100,
+            total: roundMoney(data.total),
           }));
 
         return {
           days,
-          totalSpent: Math.round(totalSpent * 100) / 100,
+          totalSpent: roundMoney(totalSpent),
           transactionCount: recentTransactions.filter((t) => t.amount > 0).length,
           topMerchants,
         };
@@ -250,7 +227,7 @@ export function buildTools(userId: number, phase: string) {
         }
         if (income !== undefined && obTotal !== undefined) {
           data.obligationsTotal = obTotal;
-          data.gap = Math.round((income - obTotal) * 100) / 100;
+          data.gap = computeGap(income, obTotal);
         }
 
         const result = await upsertAllocation(data);

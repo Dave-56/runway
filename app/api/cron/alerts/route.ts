@@ -18,6 +18,7 @@ import {
 import { syncTransactions } from "@/lib/plaid/transactions";
 import { updateCursor } from "@/lib/db/queries";
 import { sendFormattedMessage } from "@/lib/telegram/client";
+import { escapeMarkdownV2 } from "@/lib/telegram/format";
 import { isQuietHours, daysUntil, getWeekBoundaries } from "@/lib/utils/dates";
 import {
   buildAlertPrompt,
@@ -26,8 +27,62 @@ import {
   type SystemPromptContext,
 } from "@/lib/agent/prompts";
 import { callLLM } from "@/lib/agent/provider";
+import { validateNumbersAgainstExpected } from "@/lib/agent/validate";
+import { formatCurrency } from "@/lib/utils/money";
+import { sumMoney } from "@/lib/harness/calculations";
 
 // ── GET handler — called by Vercel Cron ──────────────────────────────
+
+function getExpectedAlertAmounts(data: AlertPromptData): number[] {
+  const renewalTotal = sumMoney(data.renewals.map((renewal) => renewal.amount));
+  return [
+    renewalTotal,
+    ...data.renewals.map((renewal) => renewal.amount),
+    ...data.zombies.map((zombie) => zombie.amount),
+    ...data.unusualCharges.flatMap((charge) => [
+      charge.amount,
+      charge.typicalAmount,
+    ]),
+    ...data.milestones.flatMap((milestone) => [
+      milestone.currentBalance,
+      milestone.threshold,
+    ]),
+  ];
+}
+
+function buildSafeAlertFallback(data: AlertPromptData): string {
+  const parts: string[] = [];
+
+  if (data.renewals.length > 0) {
+    const total = sumMoney(data.renewals.map((renewal) => renewal.amount));
+    parts.push(
+      `${data.renewals.length} subs renew in the next 5 days totaling ${formatCurrency(total)}.`,
+    );
+  }
+
+  if (data.zombies.length > 0) {
+    const firstZombie = data.zombies[0];
+    parts.push(
+      `${firstZombie.merchant} charged again at ${formatCurrency(firstZombie.amount)}.`,
+    );
+  }
+
+  if (data.unusualCharges.length > 0) {
+    const firstCharge = data.unusualCharges[0];
+    parts.push(
+      `${formatCurrency(firstCharge.amount)} posted from ${firstCharge.merchant}, higher than the usual ${formatCurrency(firstCharge.typicalAmount)}.`,
+    );
+  }
+
+  if (data.milestones.length > 0) {
+    const firstMilestone = data.milestones[0];
+    parts.push(
+      `${firstMilestone.accountName} is now ${formatCurrency(firstMilestone.currentBalance)}, below ${formatCurrency(firstMilestone.threshold)}.`,
+    );
+  }
+
+  return escapeMarkdownV2(`Heads up — ${parts.join(" ")}`);
+}
 
 export async function GET(req: NextRequest) {
   try {
@@ -274,17 +329,61 @@ export async function GET(req: NextRequest) {
       messages,
     });
 
+    const expectedAmounts = getExpectedAlertAmounts(alertData);
+    let finalAlertMessage = alertMessage;
+    let validation = validateNumbersAgainstExpected(
+      finalAlertMessage,
+      expectedAmounts,
+      { requireAmount: true },
+    );
+
+    if (!validation.valid) {
+      console.warn(
+        "[cron/alerts] Blocking mismatched amounts:",
+        validation.mismatches.map((amount) => `$${amount}`),
+      );
+
+      const retry = await callLLM({
+        systemPrompt,
+        messages: [
+          {
+            role: "user",
+            content: [
+              alertPrompt,
+              "",
+              "Rewrite the alert.",
+              `Use only these dollar amounts: ${expectedAmounts
+                .map((amount) => formatCurrency(amount))
+                .join(", ")}`,
+              "If unsure, avoid introducing any new dollar amount.",
+            ].join("\n"),
+          },
+        ],
+      });
+
+      finalAlertMessage = retry.text;
+      validation = validateNumbersAgainstExpected(
+        finalAlertMessage,
+        expectedAmounts,
+        { requireAmount: true },
+      );
+    }
+
+    if (!validation.valid) {
+      finalAlertMessage = buildSafeAlertFallback(alertData);
+    }
+
     // 9. Send via Telegram
     const telegramMessageId = await sendFormattedMessage(
       dbUser.telegramChatId,
-      alertMessage,
+      finalAlertMessage,
     );
 
     // 10. Log in checkin_log with type "alert"
     await createCheckinLog({
       userId: dbUser.id,
       type: "alert",
-      messageText: alertMessage,
+      messageText: finalAlertMessage,
       telegramMessageId,
     });
 
