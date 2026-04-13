@@ -33,6 +33,9 @@ interface AllocationContext {
 interface MemoryEntry {
   key: string;
   value: string;
+  type: string;
+  source: string;
+  updatedAt: Date;
 }
 
 interface CheckinEntry {
@@ -198,10 +201,31 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
     sections.push(`User's financial context:\n${financials.join("\n")}`);
   }
 
-  // Memories
+  // Memories — grouped by type for clarity
   if (ctx.memories.length > 0) {
-    const memoryLines = ctx.memories.map((m) => `- ${m.key}: ${m.value}`);
-    sections.push(`Things you remember about this user:\n${memoryLines.join("\n")}`);
+    const grouped: Record<string, MemoryEntry[]> = {};
+    for (const m of ctx.memories) {
+      const t = m.type || "other";
+      if (!grouped[t]) grouped[t] = [];
+      grouped[t].push(m);
+    }
+
+    const typeLabels: Record<string, string> = {
+      life_event: "Life events",
+      financial: "Financial context",
+      behavioral: "Preferences & behavior",
+      goal: "Goals",
+      other: "Other",
+    };
+
+    const memoryParts: string[] = [];
+    for (const [type, entries] of Object.entries(grouped)) {
+      const label = typeLabels[type] || type;
+      const lines = entries.map((m) => `- ${m.key}: ${m.value}`);
+      memoryParts.push(`${label}:\n${lines.join("\n")}`);
+    }
+
+    sections.push(`Things you remember about this user:\n\n${memoryParts.join("\n\n")}`);
   }
 
   // Recent check-ins for continuity

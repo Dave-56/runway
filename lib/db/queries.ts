@@ -9,6 +9,7 @@ import {
   debtSnapshot,
   checkinLog,
   conversationMemory,
+  conversationHistory,
 } from "./schema";
 
 // ── User ───────────────────────────────────────────────────────────────
@@ -263,7 +264,16 @@ export async function getCheckinCountThisWeek(
 
 // ── Conversation Memory ────────────────────────────────────────────────
 
-export async function saveMemory(userId: number, key: string, value: string) {
+type MemoryType = "financial" | "behavioral" | "life_event" | "goal";
+type MemorySource = "user_stated" | "agent_inferred";
+
+export async function saveMemory(
+  userId: number,
+  key: string,
+  value: string,
+  type: MemoryType = "behavioral",
+  source: MemorySource = "agent_inferred",
+) {
   const existing = await db.query.conversationMemory.findFirst({
     where: and(
       eq(conversationMemory.userId, userId),
@@ -273,14 +283,14 @@ export async function saveMemory(userId: number, key: string, value: string) {
   if (existing) {
     const [updated] = await db
       .update(conversationMemory)
-      .set({ value })
+      .set({ value, type, source })
       .where(eq(conversationMemory.id, existing.id))
       .returning();
     return updated;
   }
   const [created] = await db
     .insert(conversationMemory)
-    .values({ userId, key, value })
+    .values({ userId, key, value, type, source })
     .returning();
   return created;
 }
@@ -300,5 +310,39 @@ export async function recallMemoryByPattern(userId: number, keyPattern: string) 
       eq(conversationMemory.userId, userId),
       ilike(conversationMemory.key, keyPattern),
     ),
+    orderBy: desc(conversationMemory.updatedAt),
   });
+}
+
+export async function recallMemoryByType(userId: number, type: MemoryType) {
+  return db.query.conversationMemory.findMany({
+    where: and(
+      eq(conversationMemory.userId, userId),
+      eq(conversationMemory.type, type),
+    ),
+    orderBy: desc(conversationMemory.updatedAt),
+  });
+}
+
+// ── Conversation History ──────────────────────────────────────────────
+
+export async function saveConversationMessage(
+  userId: number,
+  role: "user" | "assistant",
+  content: string,
+) {
+  const [msg] = await db
+    .insert(conversationHistory)
+    .values({ userId, role, content })
+    .returning();
+  return msg;
+}
+
+export async function getRecentConversation(userId: number, limit = 10) {
+  const rows = await db.query.conversationHistory.findMany({
+    where: eq(conversationHistory.userId, userId),
+    orderBy: desc(conversationHistory.createdAt),
+    limit,
+  });
+  return rows.reverse();
 }

@@ -250,7 +250,13 @@ export async function GET(req: NextRequest) {
         interestRate: d.interestRate,
         minimumPayment: d.minimumPayment,
       })),
-      memories: memories.map((m) => ({ key: m.key, value: m.value })),
+      memories: memories.map((m) => ({
+        key: m.key,
+        value: m.value,
+        type: m.type,
+        source: m.source,
+        updatedAt: m.updatedAt,
+      })),
       recentCheckins: recentCheckinsForCtx.map((c) => ({
         type: c.type,
         messageText: c.messageText,

@@ -8,6 +8,20 @@
       "when": 1776030337475,
       "tag": "0000_orange_tigra",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1776056791929,
+      "tag": "0001_aspiring_white_tiger",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1776063152587,
+      "tag": "0002_friendly_joshua_kane",
+      "breakpoints": true
     }
   ]
 }

@@ -1,5 +1,4 @@
-import { plaidClient } from "@/lib/plaid/client";
-import { CountryCode, Products } from "plaid";
+import { createLinkToken } from "@/lib/plaid/client";
 
 export async function POST(request: Request) {
   try {
@@ -9,18 +8,9 @@ export async function POST(request: Request) {
       return Response.json({ error: "user_id is required" }, { status: 400 });
     }
 
-    const response = await plaidClient.linkTokenCreate({
-      client_name: "Clearline",
-      language: "en",
-      country_codes: [CountryCode.Us],
-      user: {
-        client_user_id: String(user_id),
-      },
-      products: [Products.Auth, Products.Transactions],
-      required_if_supported_products: [Products.Liabilities],
-    });
+    const link_token = await createLinkToken(Number(user_id));
 
-    return Response.json({ link_token: response.data.link_token });
+    return Response.json({ link_token });
   } catch (error) {
     console.error("Plaid link token creation failed:", error);
     return Response.json(

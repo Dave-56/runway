@@ -10,9 +10,14 @@ import {
   getRecentCheckins,
   updateUser,
   markCheckinReplied,
+  getPlaidConnection,
+  recallMemoryByPattern,
+  getRecentConversation,
+  saveConversationMessage,
 } from "@/lib/db/queries";
-import { recallMemoryByPattern } from "@/lib/db/queries";
-import { sendMessage } from "@/lib/telegram/client";
+import { sendMessage, sendMessageWithUrlButton } from "@/lib/telegram/client";
+import { createLinkToken } from "@/lib/plaid/client";
+import { escapeMarkdownV2 } from "@/lib/telegram/format";
 import type { user } from "@/lib/db/schema";
 
 type User = typeof user.$inferSelect;
@@ -31,8 +36,32 @@ export async function processMessage(
   text: string,
   callbackData?: string,
 ): Promise<void> {
+  // 0. Check if user has a bank connected — if not, send Plaid Link flow
+  const plaidConn = await getPlaidConnection(dbUser.id);
+  if (!plaidConn) {
+    try {
+      const linkToken = await createLinkToken(dbUser.id);
+      const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://clearline.vercel.app";
+      const linkUrl = `${appUrl}/link?token=${linkToken}&user_id=${dbUser.id}`;
+
+      await sendMessageWithUrlButton(
+        dbUser.telegramChatId,
+        escapeMarkdownV2("No bank linked yet. Tap below to connect your accounts."),
+        "Connect bank",
+        linkUrl,
+      );
+    } catch (err) {
+      console.error("Failed to generate Plaid Link for user:", err);
+      await sendMessage(
+        dbUser.telegramChatId,
+        "Having trouble setting up bank linking right now. Try again in a bit.",
+      );
+    }
+    return;
+  }
+
   // 1. Load full context in parallel
-  const [obligations, obligationsTotal, allocation, debts, memories, recentCheckins] =
+  const [obligations, obligationsTotal, allocation, debts, memories, recentCheckins, conversationHistory] =
     await Promise.all([
       getActiveObligations(dbUser.id),
       getObligationsTotal(dbUser.id),
@@ -40,6 +69,7 @@ export async function processMessage(
       getDebts(dbUser.id),
       recallMemoryByPattern(dbUser.id, "%"),
       getRecentCheckins(dbUser.id, 5),
+      getRecentConversation(dbUser.id, 10),
     ]);
 
   // 2. Build system prompt
@@ -73,7 +103,13 @@ export async function processMessage(
       interestRate: d.interestRate,
       minimumPayment: d.minimumPayment,
     })),
-    memories: memories.map((m) => ({ key: m.key, value: m.value })),
+    memories: memories.map((m) => ({
+      key: m.key,
+      value: m.value,
+      type: m.type,
+      source: m.source,
+      updatedAt: m.updatedAt,
+    })),
     recentCheckins: recentCheckins.map((c) => ({
       type: c.type,
       messageText: c.messageText,
@@ -83,12 +119,19 @@ export async function processMessage(
 
   const systemPrompt = buildSystemPrompt(promptContext);
 
-  // 3. Build the user message
+  // 3. Build messages with conversation history for multi-turn context
   const userContent = callbackData
     ? `[User tapped button: "${callbackData}"]`
     : text;
 
-  const messages: ModelMessage[] = [{ role: "user", content: userContent }];
+  const historyMessages: ModelMessage[] = conversationHistory.map((msg) => ({
+    role: msg.role as "user" | "assistant",
+    content: msg.content,
+  }));
+  const messages: ModelMessage[] = [
+    ...historyMessages,
+    { role: "user", content: userContent },
+  ];
 
   // 4. Call LLM with tools — allow up to 5 steps for tool calling loops
   const tools = buildTools(dbUser.id);
@@ -102,6 +145,12 @@ export async function processMessage(
   // 5. Send response via Telegram
   if (result.text) {
     await sendMessage(dbUser.telegramChatId, result.text);
+  }
+
+  // 5b. Persist both sides of the conversation
+  await saveConversationMessage(dbUser.id, "user", userContent);
+  if (result.text) {
+    await saveConversationMessage(dbUser.id, "assistant", result.text);
   }
 
   // 6. Mark previous check-in as replied (if the user is responding to one)

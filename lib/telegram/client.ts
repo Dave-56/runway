@@ -97,6 +97,31 @@ export async function sendMessageWithKeyboard(
 }
 
 /**
+ * Send a message with an inline URL button.
+ * Unlike callback buttons, URL buttons open the link in Telegram's in-app browser.
+ * The message text should be pre-escaped MarkdownV2.
+ * Returns the sent message's message_id.
+ */
+export async function sendMessageWithUrlButton(
+  chatId: string,
+  markdownV2Text: string,
+  buttonText: string,
+  url: string,
+): Promise<number> {
+  const result = await telegramFetch("sendMessage", {
+    chat_id: chatId,
+    text: markdownV2Text,
+    parse_mode: "MarkdownV2",
+    disable_web_page_preview: true,
+    reply_markup: {
+      inline_keyboard: [[{ text: buttonText, url }]],
+    },
+  });
+
+  return result.result.message_id;
+}
+
+/**
  * Acknowledge an inline button tap.
  * Call this immediately when receiving a callback_query to remove the loading spinner.
  */

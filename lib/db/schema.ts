@@ -56,6 +56,20 @@ export const checkinTypeEnum = pgEnum("checkin_type", [
   "milestone",
 ]);
 
+export const messageRoleEnum = pgEnum("message_role", ["user", "assistant"]);
+
+export const memoryTypeEnum = pgEnum("memory_type", [
+  "financial",
+  "behavioral",
+  "life_event",
+  "goal",
+]);
+
+export const memorySourceEnum = pgEnum("memory_source", [
+  "user_stated",
+  "agent_inferred",
+]);
+
 // ── Tables ─────────────────────────────────────────────────────────────
 
 export const user = pgTable(
@@ -190,18 +204,44 @@ export const checkinLog = pgTable(
   ],
 );
 
-export const conversationMemory = pgTable("conversation_memory", {
-  id: serial("id").primaryKey(),
-  userId: integer("user_id")
-    .notNull()
-    .references(() => user.id),
-  key: text("key").notNull(),
-  value: text("value").notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-  updatedAt: timestamp("updated_at", { withTimezone: true })
-    .notNull()
-    .defaultNow()
-    .$onUpdate(() => new Date()),
-});
+export const conversationMemory = pgTable(
+  "conversation_memory",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => user.id),
+    key: text("key").notNull(),
+    value: text("value").notNull(),
+    type: memoryTypeEnum("type").notNull().default("behavioral"),
+    source: memorySourceEnum("source").notNull().default("agent_inferred"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (t) => [
+    index("conversation_memory_user_type_idx").on(t.userId, t.type),
+  ],
+);
+
+export const conversationHistory = pgTable(
+  "conversation_history",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => user.id),
+    role: messageRoleEnum("role").notNull(),
+    content: text("content").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    index("conversation_history_user_created_idx").on(t.userId, t.createdAt),
+  ],
+);

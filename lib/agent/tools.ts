@@ -9,6 +9,7 @@ import {
   upsertAllocation,
   saveMemory,
   recallMemoryByPattern,
+  recallMemoryByType,
   getPlaidConnection,
 } from "@/lib/db/queries";
 import { getAccountBalances } from "@/lib/plaid/balances";
@@ -214,27 +215,44 @@ export function buildTools(userId: number) {
 
     save_memory: tool({
       description:
-        "Save a piece of information about the user for future reference. Use for life events, preferences, or context that should persist across conversations. Key format: 'category:detail' (e.g. 'life_event:sister_got_job', 'preference:checkin_time').",
+        "Save a piece of information about the user for future reference. Categorize it by type so memories stay organized and retrievable.",
       inputSchema: z.object({
-        key: z.string().describe("Memory key in 'category:detail' format"),
+        key: z.string().describe("Short descriptive key (e.g. 'sister_got_job', 'prefers_morning_checkins', 'pay_off_chase_by_december')"),
         value: z.string().describe("The information to remember"),
+        type: z
+          .enum(["financial", "behavioral", "life_event", "goal"])
+          .describe(
+            "financial: income changes, spending habits, account events. behavioral: communication preferences, check-in timing. life_event: job changes, moves, family events. goal: debt targets, savings milestones, deadlines.",
+          ),
+        source: z
+          .enum(["user_stated", "agent_inferred"])
+          .default("agent_inferred")
+          .describe("user_stated: user explicitly told you this. agent_inferred: you noticed or concluded this from context."),
       }),
-      execute: async ({ key, value }) => {
-        await saveMemory(userId, key, value);
+      execute: async ({ key, value, type, source }) => {
+        await saveMemory(userId, key, value, type, source);
         return { success: true };
       },
     }),
 
     recall_memory: tool({
       description:
-        "Recall stored memories about the user. Use a SQL ILIKE pattern to search keys (e.g. 'life_event:%' to get all life events, '%sister%' to find anything about the user's sister).",
+        "Recall stored memories about the user. Search by key pattern, or filter by type to get all memories in a category.",
       inputSchema: z.object({
         key_pattern: z
           .string()
-          .describe("SQL ILIKE pattern to match memory keys (e.g. 'life_event:%')"),
+          .optional()
+          .describe("SQL ILIKE pattern to match memory keys (e.g. '%sister%'). Omit to use type filter instead."),
+        type: z
+          .enum(["financial", "behavioral", "life_event", "goal"])
+          .optional()
+          .describe("Filter memories by type. Omit to search by key_pattern."),
       }),
-      execute: async ({ key_pattern }) => {
-        return recallMemoryByPattern(userId, key_pattern);
+      execute: async ({ key_pattern, type }) => {
+        if (type) {
+          return recallMemoryByType(userId, type);
+        }
+        return recallMemoryByPattern(userId, key_pattern || "%");
       },
     }),
   };
