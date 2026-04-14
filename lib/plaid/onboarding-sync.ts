@@ -7,13 +7,15 @@ import {
   getPlaidErrorMessage,
   isProductNotReadyError,
 } from "./recurring";
-import { upsertObligation } from "@/lib/db/queries";
+import { getLiabilities } from "./liabilities";
+import { upsertDebt, upsertObligation } from "@/lib/db/queries";
 
 export type RecurringOnboardingStatus = "ready" | "warming_up" | "failed";
 
 export interface RecurringOnboardingResult {
   status: RecurringOnboardingStatus;
   obligationsSynced: number;
+  debtsSynced: number;
   errorCode?: string;
   errorMessage?: string;
 }
@@ -52,15 +54,46 @@ export async function syncRecurringOnboardingData(
       synced += 1;
     }
 
+    let debtsSynced = 0;
+    try {
+      const liabilities = await getLiabilities(encryptedAccessToken);
+      liabilities.sort((a, b) => {
+        const aRate = a.interestRate ?? -1;
+        const bRate = b.interestRate ?? -1;
+        if (bRate !== aRate) return bRate - aRate;
+        return b.currentBalance - a.currentBalance;
+      });
+
+      for (let index = 0; index < liabilities.length; index += 1) {
+        const debt = liabilities[index];
+        await upsertDebt({
+          userId,
+          accountName: debt.accountName,
+          plaidAccountId: debt.accountId,
+          currentBalance: debt.currentBalance,
+          interestRate: debt.interestRate,
+          minimumPayment: debt.minimumPayment,
+          priorityOrder: index + 1,
+        });
+        debtsSynced += 1;
+      }
+    } catch (error) {
+      if (!isProductNotReadyError(error)) {
+        console.warn("[onboarding-sync] Failed to sync liabilities:", error);
+      }
+    }
+
     return {
       status: "ready",
       obligationsSynced: synced,
+      debtsSynced,
     };
   } catch (error) {
     if (isProductNotReadyError(error)) {
       return {
         status: "warming_up",
         obligationsSynced: 0,
+        debtsSynced: 0,
         errorCode: getPlaidErrorCode(error) ?? "PRODUCT_NOT_READY",
         errorMessage: getPlaidErrorMessage(error) ?? undefined,
       };

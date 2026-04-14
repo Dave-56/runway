@@ -172,6 +172,7 @@ export async function processMessage(
         merchantName: o.merchantName,
         amount: o.amount,
       })),
+      debtCount: debts.length,
       allocation: allocation
         ? { monthlyIncome: allocation.monthlyIncome, gap: allocation.gap }
         : null,

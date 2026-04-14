@@ -20,6 +20,7 @@ export interface BuildRoutedActionInput {
   obligationsTotal: number;
   obligations: ObligationSnapshot[];
   allocation: AllocationSnapshot | null;
+  debtCount?: number;
 }
 
 export interface BuildRoutedActionDeps {
@@ -109,6 +110,12 @@ function getHybridSplit(gap: number): { debtAmount: number; cushionAmount: numbe
 
 function sortObligations(obligations: ObligationSnapshot[]): ObligationSnapshot[] {
   return [...obligations].sort((a, b) => b.amount - a.amount);
+}
+
+function hasDebtLikeObligation(obligations: ObligationSnapshot[]): boolean {
+  return obligations.some((item) =>
+    /(credit card|card payment|loan|student loan|mortgage)/i.test(item.merchantName),
+  );
 }
 
 function buildOnboardingTopMessage(
@@ -235,6 +242,44 @@ export function buildRoutedAction(
 
     const monthlyIncome = roundToCents(parsedIncome);
     const gap = deps.computeGap(monthlyIncome, input.obligationsTotal);
+    const hasDebtAccounts = (input.debtCount ?? 0) > 0;
+    const hasDebtLikeFlows = hasDebtLikeObligation(input.obligations);
+
+    if (!hasDebtAccounts) {
+      const cushionRunwayMonths = gap > 0 ? Math.ceil(1000 / gap) : null;
+      const cushionRunwayLine = cushionRunwayMonths
+        ? `At that pace, you stack a $1,000 cushion in about ${cushionRunwayMonths} month${cushionRunwayMonths === 1 ? "" : "s"}.`
+        : "";
+      const projectionLine = buildSingleTrackProjection(
+        gap,
+        deps.formatCurrency,
+        "in your emergency cash buffer (cushion)",
+      );
+      const debtContextLine = hasDebtLikeFlows
+        ? "I can see debt-like payment flows in recurring charges, but I still don't have linked debt balances/APRs yet."
+        : "I still don't have linked debt balances/APRs yet.";
+
+      return {
+        finalText: [
+          `${deps.formatCurrency(monthlyIncome)} in and ${deps.formatCurrency(input.obligationsTotal)} out leaves ${deps.formatCurrency(gap)}/month.`,
+          `${debtContextLine} So I can't build a true payoff order yet.`,
+          `My call for now: put ${deps.formatCurrency(Math.max(0, gap))}/month into your emergency cash buffer (cushion) until debt balances sync.`,
+          cushionRunwayLine,
+          projectionLine,
+          "What do you want to do with the gap for now: cushion-only until balances sync, or both as a temporary split?",
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        userUpdate: { phase: "allocate" },
+        allocationUpdate: {
+          userId: input.userId,
+          monthlyIncome,
+          obligationsTotal: input.obligationsTotal,
+          gap,
+        },
+      };
+    }
+
     const { debtAmount, cushionAmount } = getHybridSplit(gap);
     const monthsToThousand =
       cushionAmount > 0 ? Math.ceil(1000 / cushionAmount) : null;
@@ -303,12 +348,19 @@ export function buildRoutedAction(
         deps.formatCurrency,
         "to debt",
       );
+      const noDebtContext =
+        (input.debtCount ?? 0) > 0
+          ? ""
+          : "I still don't have linked debt balances/APRs, so this is a temporary generic debt allocation until balances sync.";
       return {
         finalText: [
+          noDebtContext,
           `Done. ${deps.formatCurrency(spendableGap)}/month is now set to debt payoff.`,
           projectionLine,
           "I’ll track it with you in check-ins.",
-        ].join("\n"),
+        ]
+          .filter(Boolean)
+          .join("\n"),
         userUpdate: { phase: "stay_honest" },
         allocationUpdate: {
           ...baseAllocation,
@@ -356,6 +408,9 @@ export function buildRoutedAction(
 
     return {
       finalText: [
+        (input.debtCount ?? 0) > 0
+          ? ""
+          : "I still don't have linked debt balances/APRs, so this is a temporary split until balances sync.",
         `Done. I set a hybrid split: ${deps.formatCurrency(debtAmount)}/month to debt and ${deps.formatCurrency(cushionAmount)}/month to your emergency cash buffer (cushion).`,
         cushionRunwayLine.trim(),
         projectionLine,

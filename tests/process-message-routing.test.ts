@@ -81,6 +81,7 @@ async function main() {
         text: "",
         obligationsTotal: 3106.99,
         obligations,
+        debtCount: 2,
         allocation: null,
       },
       { extractMoneyAmount, formatCurrency, computeGap },
@@ -108,6 +109,7 @@ async function main() {
         text: "yes",
         obligationsTotal: 2899,
         obligations,
+        debtCount: 2,
         allocation: null,
       },
       { extractMoneyAmount, formatCurrency, computeGap },
@@ -128,6 +130,7 @@ async function main() {
         text: "$6,893",
         obligationsTotal,
         obligations: [],
+        debtCount: 2,
         allocation: null,
       },
       { extractMoneyAmount, formatCurrency, computeGap },
@@ -158,6 +161,7 @@ async function main() {
         text: "debt",
         obligationsTotal,
         obligations: [],
+        debtCount: 2,
         allocation: {
           monthlyIncome,
           gap: computeGap(monthlyIncome, obligationsTotal),
@@ -185,6 +189,7 @@ async function main() {
         text: "both",
         obligationsTotal,
         obligations: [],
+        debtCount: 2,
         allocation: {
           monthlyIncome,
           gap: computeGap(monthlyIncome, obligationsTotal),
@@ -212,6 +217,7 @@ async function main() {
         text: "cushion",
         obligationsTotal,
         obligations: [],
+        debtCount: 0,
         allocation: null,
       },
       { extractMoneyAmount, formatCurrency, computeGap },
@@ -232,6 +238,7 @@ async function main() {
         text: "",
         obligationsTotal,
         obligations: [],
+        debtCount: 0,
         allocation: null,
       },
       { extractMoneyAmount, formatCurrency, computeGap },
@@ -252,11 +259,33 @@ async function main() {
         text: "what is my balance?",
         obligationsTotal,
         obligations: [],
+        debtCount: 0,
         allocation: null,
       },
       { extractMoneyAmount, formatCurrency, computeGap },
     );
     assert.equal(action, null);
+  });
+
+  await run("income_report without linked debt accounts defaults to cushion-first guidance", () => {
+    const action = buildRoutedAction(
+      {
+        userId: 99,
+        phase: "know_number",
+        intent: "income_report",
+        text: "$500",
+        obligationsTotal: 114.4,
+        obligations: [{ merchantName: "CREDIT CARD 3333 PAYMENT *//", amount: 25 }],
+        debtCount: 0,
+        allocation: null,
+      },
+      { extractMoneyAmount, formatCurrency, computeGap },
+    );
+
+    assert.ok(action);
+    assert.match(action.finalText, /debt-like payment flows/i);
+    assert.match(action.finalText, /can't build a true payoff order yet/i);
+    assert.match(action.finalText, /cushion-only until balances sync/i);
   });
 
   console.log("All process-message routing regression tests passed.");

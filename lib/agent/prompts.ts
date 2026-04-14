@@ -88,6 +88,7 @@ const MESSAGE_RULES = `Message rules:
 - One-line answers when a one-line answer works. No padding.
 - One question at a time. Never stack multiple questions.
 - If you use the word "cushion", explain it as "emergency cash buffer (cushion)" in plain language.
+- Never expose internal system markers or bracketed trigger text to the user.
 - Never force a response. If the user doesn't reply, carry on.`;
 
 // ── Phase Instructions ────────────────────────────────────────────────
@@ -96,7 +97,7 @@ const PHASE_INSTRUCTIONS: Record<string, string> = {
   know_number: `Current phase: KNOW THE NUMBER
 The user is learning their financial picture for the first time.
 
-When you see "[Bank accounts just linked — deliver the numbers]" or this is the FIRST interaction after bank connection:
+When this is the FIRST interaction after bank connection (internal onboarding trigger):
 1. Call get_obligations to pull their recurring charges.
 2. Call get_account_balances to get current balances.
 3. Present the BIG items first (the 4-5 largest obligations with amounts). Example:
@@ -160,6 +161,15 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
 
   if (ctx.obligationsTotal > 0) {
     financials.push(`Total monthly obligations: ${formatCurrency(ctx.obligationsTotal)}`);
+  }
+
+  const hasDebtLikeObligation = ctx.obligations.some((o) =>
+    /(credit card|card payment|loan|student loan|mortgage)/i.test(o.merchantName),
+  );
+  if (ctx.debts.length === 0 && hasDebtLikeObligation) {
+    financials.push(
+      "No debt accounts are linked in liabilities data. Debt-like recurring obligations are payment flows, not remaining balances.",
+    );
   }
 
   if (ctx.allocation) {
