@@ -126,9 +126,8 @@ export function buildTools(userId: number, phase: string) {
           }
 
           return getDebts(userId);
-        } catch {
-          // Re-sync failed — return the empty list so the LLM can guide
-          // the user to link their accounts.
+        } catch (error) {
+          console.warn("[get_debt_summary] Liabilities re-sync failed:", error);
           return debts;
         }
       },
