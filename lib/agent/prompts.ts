@@ -168,7 +168,9 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
   );
   if (ctx.debts.length === 0 && hasDebtLikeObligation) {
     financials.push(
-      "No debt accounts are linked in liabilities data. Debt-like recurring obligations are payment flows, not remaining balances.",
+      "Debt-like recurring payments detected in obligations but actual debt account balances have not been synced yet. " +
+      "When the user asks about their total debt, call get_debt_summary first — it will attempt to pull balances from their linked accounts. " +
+      "If it still returns empty, tell the user you can see they have debt payments but don't have the actual balances yet, and ask them to link their credit card or loan accounts so you can pull the numbers.",
     );
   }
 

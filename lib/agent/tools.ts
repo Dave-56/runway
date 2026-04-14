@@ -13,8 +13,9 @@ import {
   getPlaidConnection,
 } from "@/lib/db/queries";
 import { getAccountBalances } from "@/lib/plaid/balances";
+import { getLiabilities } from "@/lib/plaid/liabilities";
 import { syncTransactions } from "@/lib/plaid/transactions";
-import { updateCursor } from "@/lib/db/queries";
+import { updateCursor, upsertDebt } from "@/lib/db/queries";
 import {
   calculateDebtPayoff,
   computeGap,
@@ -92,7 +93,44 @@ export function buildTools(userId: number, phase: string) {
         "Get all debt accounts (credit cards, loans) with current balances, interest rates, and minimum payments.",
       inputSchema: z.object({}),
       execute: async () => {
-        return getDebts(userId);
+        const debts = await getDebts(userId);
+        if (debts.length > 0) return debts;
+
+        // Debt table empty — attempt a liabilities re-sync in case the
+        // initial onboarding sync failed or Plaid wasn't ready yet.
+        const conn = await getPlaidConnection(userId);
+        if (!conn) return debts;
+
+        try {
+          const liabilities = await getLiabilities(conn.accessToken);
+          if (liabilities.length === 0) return debts;
+
+          liabilities.sort((a, b) => {
+            const aRate = a.interestRate ?? -1;
+            const bRate = b.interestRate ?? -1;
+            if (bRate !== aRate) return bRate - aRate;
+            return b.currentBalance - a.currentBalance;
+          });
+
+          for (let i = 0; i < liabilities.length; i++) {
+            const d = liabilities[i];
+            await upsertDebt({
+              userId,
+              accountName: d.accountName,
+              plaidAccountId: d.accountId,
+              currentBalance: d.currentBalance,
+              interestRate: d.interestRate,
+              minimumPayment: d.minimumPayment,
+              priorityOrder: i + 1,
+            });
+          }
+
+          return getDebts(userId);
+        } catch {
+          // Re-sync failed — return the empty list so the LLM can guide
+          // the user to link their accounts.
+          return debts;
+        }
       },
     }),
 
