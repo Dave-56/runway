@@ -161,24 +161,55 @@ export async function processMessage(
     hasMonthlyIncome: allocation?.monthlyIncome != null,
   });
 
-  const routedAction = buildRoutedAction(
-    {
+  // Routing decision log — one structured line per inbound message for debugging
+  console.log(
+    "[routing]",
+    JSON.stringify({
       userId: dbUser.id,
       phase: dbUser.phase,
       intent: intentDecision.intent,
-      text,
-      obligationsTotal,
-      obligations: obligations.map((o) => ({
-        merchantName: o.merchantName,
-        amount: o.amount,
-      })),
-      debtCount: debts.length,
-      allocation: allocation
-        ? { monthlyIncome: allocation.monthlyIncome, gap: allocation.gap }
-        : null,
-    },
-    { extractMoneyAmount, formatCurrency, computeGap },
+      confidence: intentDecision.confidence,
+      source: intentDecision.source,
+      pendingState: intentDecision.pendingState,
+      textPreview: (text || "").slice(0, 40),
+      callbackData: callbackData || null,
+    }),
   );
+
+  // Safety valve: if the classifier isn't confident enough, skip canned
+  // responses and let the LLM handle it. Button callbacks (confidence 1,
+  // source "deterministic") always pass through.
+  const MIN_ROUTED_CONFIDENCE = 0.9;
+  const skipRouting =
+    intentDecision.confidence < MIN_ROUTED_CONFIDENCE &&
+    intentDecision.source !== "deterministic";
+
+  const routedAction = skipRouting
+    ? null
+    : buildRoutedAction(
+        {
+          userId: dbUser.id,
+          phase: dbUser.phase,
+          intent: intentDecision.intent,
+          text,
+          obligationsTotal,
+          obligations: obligations.map((o) => ({
+            merchantName: o.merchantName,
+            amount: o.amount,
+          })),
+          debtCount: debts.length,
+          allocation: allocation
+            ? { monthlyIncome: allocation.monthlyIncome, gap: allocation.gap }
+            : null,
+        },
+        { extractMoneyAmount, formatCurrency, computeGap },
+      );
+
+  if (skipRouting) {
+    console.log(
+      "[routing] skipped canned response — low confidence, falling through to LLM",
+    );
+  }
 
   if (routedAction) {
     if (routedAction.allocationUpdate) {

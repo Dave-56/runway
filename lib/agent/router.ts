@@ -112,33 +112,44 @@ function inferPendingState(
     return "none";
   }
 
+  // Guard: only set a pending state when the last assistant message is
+  // actually *asking* the user something (contains "?"). Without this,
+  // the bot's own declarative answers can contain trigger phrases and
+  // create self-reinforcing routing loops — e.g. "I will keep these
+  // coming." re-triggering awaiting_checkin_preference on every turn.
+  const isQuestion = lastAssistant.includes("?");
+
   if (
-    lastAssistant.includes("keep these coming") ||
-    lastAssistant.includes("go quiet")
+    isQuestion &&
+    (lastAssistant.includes("keep these coming") ||
+      lastAssistant.includes("go quiet"))
   ) {
     return "awaiting_checkin_preference";
   }
 
   if (
-    lastAssistant.includes("monthly take-home") ||
-    lastAssistant.includes("take-home") ||
-    lastAssistant.includes("what's your monthly") ||
-    lastAssistant.includes("what is your monthly")
+    isQuestion &&
+    (lastAssistant.includes("monthly take-home") ||
+      lastAssistant.includes("take-home") ||
+      lastAssistant.includes("what's your monthly") ||
+      lastAssistant.includes("what is your monthly"))
   ) {
     return "awaiting_income";
   }
 
   if (
-    lastAssistant.includes("attack debt") ||
-    lastAssistant.includes("build a cushion") ||
-    lastAssistant.includes("what do you want to do with the gap")
+    isQuestion &&
+    (lastAssistant.includes("attack debt") ||
+      lastAssistant.includes("build a cushion") ||
+      lastAssistant.includes("what do you want to do with the gap"))
   ) {
     return "awaiting_allocation_choice";
   }
 
   if (
-    lastAssistant.includes("want to see the rest") ||
-    lastAssistant.includes("show the rest")
+    isQuestion &&
+    (lastAssistant.includes("want to see the rest") ||
+      lastAssistant.includes("show the rest"))
   ) {
     return "awaiting_obligation_list_confirmation";
   }
